@@ -19,32 +19,37 @@ const db = new sqlite3.Database('./bot.db', (err) => {
 // Use db.serialize to ensure commands run in order
 db.serialize(() => {
     // 1. First, run the CREATE TABLE command.
-    db.run(`CREATE TABLE IF NOT EXISTS users (
-        channelId TEXT PRIMARY KEY,
-        anilistUsername TEXT NOT NULL,
+db.run(`CREATE TABLE IF NOT EXISTS tracked_users (
+        channelId TEXT NOT NULL,
         anilistUserId INTEGER NOT NULL,
-        lastActivityId INTEGER
+        anilistUsername TEXT NOT NULL,
+        lastActivityId INTEGER,
+        PRIMARY KEY (channelId, anilistUserId)
     )`, (err) => {
         if (err) {
             return console.error("Error creating table:", err.message);
         }
-        console.log("Users table is ready.");
+        console.log("tracked_users table is ready.");
     });
 
     // 2. ONLY AFTER the above is sent, run the SELECT command.
-    db.all("SELECT * FROM users", [], (err, rows) => {
+    db.all("SELECT * FROM tracked_users", [], (err, rows) => {
         if (err) {
             console.error("Error loading users from DB:", err.message);
             throw err;
         }
         rows.forEach((row) => {
-            trackedUsers[row.channelId] = {
+            // If this channel isn't in our object yet, create it
+            if (!trackedUsers[row.channelId]) {
+                trackedUsers[row.channelId] = {};
+            }
+            // Store the user's data, keyed by their AniList ID
+            trackedUsers[row.channelId][row.anilistUserId] = {
                 anilistUsername: row.anilistUsername,
-                anilistUserId: row.anilistUserId,
                 lastActivityId: row.lastActivityId
             };
         });
-        console.log(`Loaded ${rows.length} users from the database into memory.`);
+        console.log(`Loaded ${rows.length} tracked entries from the database into memory.`);
     });
 });
 
@@ -92,12 +97,12 @@ query ($username: String) {
 `;
 
 // Function to check a single user's AniList activity
-async function checkAniListActivity(channelId) {
-    const trackingInfo = trackedUsers[channelId];
-    // We need both the username and the ID to proceed, two API calls 🥴
-    if (!trackingInfo || !trackingInfo.anilistUserId) return;
+async function checkAniListActivity(channelId, anilistUserId) {
+    // Get the specific user's tracking info
+    const trackingInfo = trackedUsers[channelId]?.[anilistUserId];
+    if (!trackingInfo) return; // Safety check
 
-    const { anilistUsername, anilistUserId, lastActivityId } = trackingInfo;
+    const { anilistUsername, lastActivityId } = trackingInfo;
 
     const query = `
         query ($userId: Int) {
@@ -158,13 +163,13 @@ async function checkAniListActivity(channelId) {
                 // Update the lastActivityId in the database
                 const newActivityId = latestActivity.id;
 
-                const sql = `UPDATE users SET lastActivityId = ? WHERE channelId = ?`;
-                db.run(sql, [newActivityId, channelId], (err) => {
+                const sql = `UPDATE tracked_users SET lastActivityId = ? WHERE channelId = ? AND anilistUserId = ?`;
+                db.run(sql, [newActivityId, channelId, anilistUserId], (err) => {
                     if (err) {
                         return console.error(err.message);
                     }
                     // Also update our in-memory object to stay in sync
-                    trackedUsers[channelId].lastActivityId = newActivityId;
+                    trackedUsers[channelId][anilistUserId].lastActivityId = newActivityId;
                     console.log(`Updated lastActivityId to ${newActivityId} for channel ${channelId} in DB.`);
                 });
             }
@@ -178,13 +183,16 @@ async function checkAniListActivity(channelId) {
 client.on('ready', () => {
     console.log(`Logged in as ${client.user.tag}!`);
     
-    // Check every 5 minutes (300,000 milliseconds)
     setInterval(() => {
         console.log("Checking for new AniList activity...");
+        // Loop through each channel being tracked
         for (const channelId in trackedUsers) {
-            checkAniListActivity(channelId);
+            // Loop through each user being tracked in that channel
+            for (const anilistUserId in trackedUsers[channelId]) {
+                checkAniListActivity(channelId, anilistUserId);
+            }
         }
-    }, 300000); 
+    }, 300000); // 5 minutes in milliseconds
 });
 
 // Listen for messages
@@ -225,30 +233,36 @@ if (command === 'track' || command === 'register') {
         .then(data => {
             if (data.data && data.data.User) {
                 const anilistUserId = data.data.User.id;
+                const channelId = message.channel.id;
 
-                // The user object we want to save
-                const userToTrack = {
-                    anilistUsername: anilistUsername,
-                    anilistUserId: anilistUserId,
-                    lastActivityId: null
-                };
+                // CHECK: Is this user already being tracked in this channel?
+                if (trackedUsers[channelId] && trackedUsers[channelId][anilistUserId]) {
+                    return message.channel.send(`**${anilistUsername}** is already being tracked in this channel.`);
+                }
 
-                //Database writing
-                const sql = `REPLACE INTO users (channelId, anilistUsername, anilistUserId, lastActivityId) VALUES (?, ?, ?, ?)`;
-                db.run(sql, [message.channel.id, anilistUsername, anilistUserId, null], (err) => {
+                // Database writing
+                const sql = `INSERT INTO tracked_users (channelId, anilistUsername, anilistUserId, lastActivityId) VALUES (?, ?, ?, ?)`;
+                db.run(sql, [channelId, anilistUsername, anilistUserId, null], (err) => {
                     if (err) {
-                        return console.error(err.message);
+                        // This will trigger if the PRIMARY KEY constraint is violated, though our check above should prevent it.
+                        console.error("DB Error on track:", err.message);
+                        return message.channel.send("An error occurred while trying to track this user.");
                     }
-                    console.log(`User ${anilistUsername} saved to database for channel ${message.channel.id}`);
                     
                     // Also update our in-memory object
-                    trackedUsers[message.channel.id] = userToTrack;
+                    if (!trackedUsers[channelId]) {
+                        trackedUsers[channelId] = {};
+                    }
+                    trackedUsers[channelId][anilistUserId] = {
+                        anilistUsername: anilistUsername,
+                        lastActivityId: null
+                    };
 
-                    message.channel.send(`Successfully found **${anilistUsername}**. Now tracking in this channel!`);
-                    checkAniListActivity(message.channel.id);
+                    message.channel.send(`Successfully found **${anilistUsername}**. Now tracking them in this channel!`);
+                    // We need to pass the userId to check immediately
+                    checkAniListActivity(channelId, anilistUserId); 
                 });
             } else {
-                // User not found
                 message.channel.send(`Could not find an AniList user with the username **${anilistUsername}**. Please check the spelling.`);
             }
         })
@@ -258,28 +272,58 @@ if (command === 'track' || command === 'register') {
         });
 
     } else if (command === 'untrack' || command === 'unregister') {
-        if (trackedUsers[message.channel.id]) {
-            const username = trackedUsers[message.channel.id].anilistUsername;
+        const channelId = message.channel.id;
+        const usersInChannel = trackedUsers[channelId];
+        const usernameToUntrack = args[0];
 
-            // Database deletion
-            const sql = `DELETE FROM users WHERE channelId = ?`;
-            db.run(sql, [message.channel.id], (err) => {
-                if (err) {
-                    return console.error(err.message);
-                }
-                console.log(`Removed user from database for channel ${message.channel.id}`);
-                
-                // Also update our in-memory object
-                delete trackedUsers[message.channel.id];
+        if (!usernameToUntrack) {
+            // If no username is provided, list the currently tracked users
+            if (usersInChannel && Object.keys(usersInChannel).length > 0) {
+                const trackedNames = Object.values(usersInChannel).map(u => u.anilistUsername).join(', ');
+                return message.channel.send(`Currently tracking: **${trackedNames}**.\nUsage: \`!anilist untrack <username>\``);
+            } else {
+                return message.channel.send('No users are currently being tracked in this channel.');
+            }
+        }
+        
+        if (!usersInChannel) {
+            return message.channel.send('No users are currently being tracked in this channel.');
+        }
+        
+        // Find the user ID matching the provided username (case-insensitive)
+        let userToUntrack = null;
+        let userIdToUntrack = null;
 
-                message.channel.send(`Stopped tracking **${username}** in this channel.`);
-            });
-        } else {
-            message.channel.send('There is no AniList user being tracked in this channel.');
+        for (const userId in usersInChannel) {
+            if (usersInChannel[userId].anilistUsername.toLowerCase() === usernameToUntrack.toLowerCase()) {
+                userToUntrack = usersInChannel[userId];
+                userIdToUntrack = userId;
+                break;
+            }
         }
 
-    } else if (command === 'help') {
-        message.channel.send('**AniList Bot Commands:**\n`!anilist track <username>` - Start tracking a user in this channel.\n`!anilist untrack` - Stop tracking a user in this channel.');
+        if (!userToUntrack) {
+            return message.channel.send(`**${usernameToUntrack}** is not being tracked in this channel.`);
+        }
+
+        // Database deletion using the composite key
+        const sql = `DELETE FROM tracked_users WHERE channelId = ? AND anilistUserId = ?`;
+        db.run(sql, [channelId, userIdToUntrack], (err) => {
+            if (err) {
+                console.error("DB Error on untrack:", err.message);
+                return message.channel.send("An error occurred while trying to untrack this user.");
+            }
+            
+            // Also update our in-memory object
+            delete trackedUsers[channelId][userIdToUntrack];
+            
+            // If the channel no longer has any tracked users, remove the channel key itself
+            if (Object.keys(trackedUsers[channelId]).length === 0) {
+                delete trackedUsers[channelId];
+            }
+
+            message.channel.send(`Stopped tracking **${userToUntrack.anilistUsername}** in this channel.`);
+        });
     }
 });
 
