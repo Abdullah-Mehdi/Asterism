@@ -247,5 +247,12 @@ if (command === 'track' || command === 'register') {
     }
 });
 
+// Simple web server to keep the bot alive on Replit
+const http = require('http');
+http.createServer(function (req, res) {
+  res.write("I'm alive");
+  res.end();
+}).listen(8080);
+
 // Log in to Discord with your client's token
 client.login(process.env.DISCORD_TOKEN);

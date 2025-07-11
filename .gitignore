@@ -1,3 +1,4 @@
 node_modules
 .env
 tracked_users.json
+bot.db
