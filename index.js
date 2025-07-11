@@ -1,8 +1,44 @@
+// File System is needed to work with other files (data.json for storage)
+const fs = require('fs');
 // Load environment variables from the .env file
 require('dotenv').config();
  
 // Import necessary classes from discord.js and EmbedBuilder for rich messages
 const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
+
+const DATA_FILE = './tracked_users.json'; // The file where we'll store our data
+
+// Load tracked users from the file
+// The key is the Discord Channel ID, the value is an object with AniList info.
+// { "channel_id_123": { "anilistUsername": "someUser", "lastActivityId": 12345 } }
+let trackedUsers = {};
+try {
+    // Check if the file exists before trying to read it
+    if (fs.existsSync(DATA_FILE)) {
+        const data = fs.readFileSync(DATA_FILE);
+        trackedUsers = JSON.parse(data);
+        console.log("Successfully loaded tracked user data.");
+    } else {
+        console.log("No data file found, starting with an empty list.");
+    }
+} catch (error) {
+    console.error("Error loading data file:", error);
+    // If the file is corrupted, start fresh to prevent a crash
+    trackedUsers = {}; 
+}
+
+// Function to save the trackedUsers object to the file
+function saveData() {
+    try {
+        // JSON.stringify converts our JS object into a string.
+        // The `null, 2` arguments make the JSON file human-readable (pretty-printed).
+        const data = JSON.stringify(trackedUsers, null, 2);
+        fs.writeFileSync(DATA_FILE, data);
+        console.log("Data saved successfully.");
+    } catch (error) {
+        console.error("Error saving data:", error);
+    }
+}
 
 // Create a new client instance
 const client = new Client({
@@ -19,12 +55,6 @@ client.on('ready', () => {
 });
 
 const fetch = require('node-fetch');
-
-// This will store our tracking data.
-// Will need to use a database going forward...
-// The key is the Discord Channel ID, the value is an object with AniList info.
-// { "channel_id_123": { "anilistUsername": "someUser", "lastActivityId": 12345 } }
-const trackedUsers = {};
 
 // The GraphQL query 
 const query = `
@@ -183,6 +213,9 @@ if (command === 'track' || command === 'register') {
                     lastActivityId: null 
                 };
 
+                saveData(); // Save the updated trackedUsers object to the file
+
+                // Send a confirmation message to the channel
                 message.channel.send(`Successfully found **${anilistUsername}** (ID: ${anilistUserId}). Now tracking in this channel!`);
                 console.log(`Started tracking ${anilistUsername} (ID: ${anilistUserId}) for channel ${message.channel.id}`);
                 
@@ -202,6 +235,7 @@ if (command === 'track' || command === 'register') {
         if (trackedUsers[message.channel.id]) {
             const username = trackedUsers[message.channel.id].anilistUsername;
             delete trackedUsers[message.channel.id];
+            saveData(); // Save the updated trackedUsers object to the file
             message.channel.send(`Stopped tracking **${username}** in this channel.`);
             console.log(`Stopped tracking for channel ${message.channel.id}`);
         } else {
