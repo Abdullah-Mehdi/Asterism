@@ -1,0 +1,26 @@
+{
+  "name": "asterism",
+  "version": "1.0.0",
+  "description": "Discord bot, details TBD",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Abdullah-Mehdi/Asterism.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/Abdullah-Mehdi/Asterism/issues"
+  },
+  "homepage": "https://github.com/Abdullah-Mehdi/Asterism#readme",
+  "dependencies": {
+    "discord.js": "^14.21.0",
+    "dotenv": "^17.2.0",
+    "node-fetch": "^2.7.0"
+  }
+}
