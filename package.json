@@ -1,16 +1,31 @@
 {
   "name": "asterism",
   "version": "1.0.0",
-  "description": "Discord bot, details TBD",
+  "description": "A Discord bot that tracks AniList user activity and posts real-time anime/manga list updates to Discord channels with rich embeds and media information.",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node index.js"
   },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Abdullah-Mehdi/Asterism.git"
   },
-  "keywords": [],
+  "keywords": [
+    "discord",
+    "bot",
+    "anilist",
+    "anime",
+    "manga",
+    "tracker",
+    "notification",
+    "graphql",
+    "discord.js",
+    "real-time",
+    "activity-tracker",
+    "anime-bot",
+    "discord-automation"
+  ],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
