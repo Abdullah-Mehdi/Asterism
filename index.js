@@ -151,7 +151,7 @@ async function checkAniListActivity(channelId, anilistUserId) {
                 if (channel) {
                     const mediaTitle = latestActivity.media.title.english || latestActivity.media.title.romaji;
                     const embed = new EmbedBuilder()
-                        .setColor('#02A9FF')
+                        .setColor('#bbadff')
                         .setAuthor({ name: `${anilistUsername}'s Activity`, url: `https://anilist.co/user/${anilistUsername}/` })
                         .setDescription(`${latestActivity.status} ${latestActivity.progress || ''} of **[${mediaTitle}](${latestActivity.media.siteUrl})**`)
                         .setThumbnail(latestActivity.media.coverImage.large)
