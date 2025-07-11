@@ -205,123 +205,142 @@ client.on('messageCreate', message => {
     const args = message.content.slice(prefix.length).trim().split(/ +/);
     const command = args.shift().toLowerCase();
 
-if (command === 'track' || command === 'register') {
-    const anilistUsername = args[0];
-    if (!anilistUsername) {
-        return message.channel.send('Please provide an AniList username. Usage: `!anilist track <username>`');
+    // list command
+    if (command === 'list') {
+        const channelId = message.channel.id;
+        const usersInChannel = trackedUsers[channelId];
+
+        const listEmbed = new EmbedBuilder()
+            .setColor('#bbadff') 
+            .setTitle(`AniList Users Tracked in this Channel`);
+
+        if (usersInChannel && Object.keys(usersInChannel).length > 0) {
+            // Map the user objects to a formatted string
+            const listOfUsers = Object.values(usersInChannel)
+                .map(user => `• **${user.anilistUsername}**`)
+                .join('\n'); // Join them with newlines
+            
+            listEmbed.setDescription(listOfUsers);
+        } else {
+            listEmbed.setDescription('No users are currently being tracked in this channel.');
+        }
+
+        return message.channel.send({ embeds: [listEmbed] });
     }
 
-    // First, find the user's ID
-    const findUserQuery = `
-        query ($username: String) {
-            User(name: $username) {
-                id
-            }
-        }`;
-    const variables = { username: anilistUsername }; 
-    const url = 'https://graphql.anilist.co'; // AniList GraphQL endpoint
-    // Prepare the request options
-    const options = {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-        body: JSON.stringify({ query: findUserQuery, variables: variables })
-    };
-
-    // Use .then() and .catch() for this async operation
-    fetch(url, options)
-        .then(response => response.json())
-        .then(data => {
-            if (data.data && data.data.User) {
-                const anilistUserId = data.data.User.id;
-                const channelId = message.channel.id;
-
-                // CHECK: Is this user already being tracked in this channel?
-                if (trackedUsers[channelId] && trackedUsers[channelId][anilistUserId]) {
-                    return message.channel.send(`**${anilistUsername}** is already being tracked in this channel.`);
+    // help command
+    else if (command === 'help') {
+        const helpEmbed = new EmbedBuilder()
+            .setColor('#bbadff') 
+            .setTitle('AniList Bot Commands')
+            .setDescription('Here are all the available commands and how to use them:')
+            .addFields(
+                { 
+                    name: 'Track a User', 
+                    value: '`!anilist track <username>`\nStarts tracking a user\'s activity in this channel.' 
+                },
+                { 
+                    name: 'Untrack a User', 
+                    value: '`!anilist untrack <username>`\nStops tracking a specific user in this channel.' 
+                },
+                { 
+                    name: 'List Tracked Users', 
+                    value: '`!anilist list`\nShows all AniList users currently being tracked in this channel.' 
+                },
+                { 
+                    name: 'Show This Help Message', 
+                    value: '`!anilist help`\nDisplays this list of commands.' 
                 }
+            )
+            .setFooter({ text: 'Remember to replace <username> with a real AniList username!' });
 
-                // Database writing
-                const sql = `INSERT INTO tracked_users (channelId, anilistUsername, anilistUserId, lastActivityId) VALUES (?, ?, ?, ?)`;
-                db.run(sql, [channelId, anilistUsername, anilistUserId, null], (err) => {
-                    if (err) {
-                        // This will trigger if the PRIMARY KEY constraint is violated, though our check above should prevent it.
-                        console.error("DB Error on track:", err.message);
-                        return message.channel.send("An error occurred while trying to track this user.");
+        return message.channel.send({ embeds: [helpEmbed] });
+    }
+    
+    else if (command === 'track' || command === 'register') {
+        const anilistUsername = args[0];
+        if (!anilistUsername) {
+            return message.channel.send('Please provide an AniList username. Usage: `!anilist track <username>`');
+        }
+
+        // Tracking logic
+        const findUserQuery = `query ($username: String) { User(name: $username) { id } }`;
+        const variables = { username: anilistUsername }; 
+        const url = 'https://graphql.anilist.co';
+        const options = {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+            body: JSON.stringify({ query: findUserQuery, variables: variables })
+        };
+        fetch(url, options)
+            .then(response => response.json())
+            .then(data => {
+                if (data.data && data.data.User) {
+                    const anilistUserId = data.data.User.id;
+                    const channelId = message.channel.id;
+                    if (trackedUsers[channelId] && trackedUsers[channelId][anilistUserId]) {
+                        return message.channel.send(`**${anilistUsername}** is already being tracked in this channel.`);
                     }
-                    
-                    // Also update our in-memory object
-                    if (!trackedUsers[channelId]) {
-                        trackedUsers[channelId] = {};
-                    }
-                    trackedUsers[channelId][anilistUserId] = {
-                        anilistUsername: anilistUsername,
-                        lastActivityId: null
-                    };
+                    const sql = `INSERT INTO tracked_users (channelId, anilistUsername, anilistUserId, lastActivityId) VALUES (?, ?, ?, ?)`;
+                    db.run(sql, [channelId, anilistUsername, anilistUserId, null], (err) => {
+                        if (err) {
+                            console.error("DB Error on track:", err.message);
+                            return message.channel.send("An error occurred while trying to track this user.");
+                        }
+                        if (!trackedUsers[channelId]) {
+                            trackedUsers[channelId] = {};
+                        }
+                        trackedUsers[channelId][anilistUserId] = { anilistUsername: anilistUsername, lastActivityId: null };
+                        message.channel.send(`Successfully found **${anilistUsername}**. Now tracking them in this channel!`);
+                        checkAniListActivity(channelId, anilistUserId); 
+                    });
+                } else {
+                    message.channel.send(`Could not find an AniList user with the username **${anilistUsername}**. Please check the spelling.`);
+                }
+            })
+            .catch(error => {
+                console.error("Error finding user:", error);
+                message.channel.send("An error occurred while trying to find the user on AniList.");
+            });
+    } 
 
-                    message.channel.send(`Successfully found **${anilistUsername}**. Now tracking them in this channel!`);
-                    // We need to pass the userId to check immediately
-                    checkAniListActivity(channelId, anilistUserId); 
-                });
-            } else {
-                message.channel.send(`Could not find an AniList user with the username **${anilistUsername}**. Please check the spelling.`);
-            }
-        })
-        .catch(error => {
-            console.error("Error finding user:", error);
-            message.channel.send("An error occurred while trying to find the user on AniList.");
-        });
-
-    } else if (command === 'untrack' || command === 'unregister') {
+    else if (command === 'untrack' || command === 'unregister') {
         const channelId = message.channel.id;
         const usersInChannel = trackedUsers[channelId];
         const usernameToUntrack = args[0];
 
+        // 'untrack' usage message
         if (!usernameToUntrack) {
-            // If no username is provided, list the currently tracked users
-            if (usersInChannel && Object.keys(usersInChannel).length > 0) {
-                const trackedNames = Object.values(usersInChannel).map(u => u.anilistUsername).join(', ');
-                return message.channel.send(`Currently tracking: **${trackedNames}**.\nUsage: \`!anilist untrack <username>\``);
-            } else {
-                return message.channel.send('No users are currently being tracked in this channel.');
-            }
+            return message.channel.send('Please provide a username to untrack. Use `!anilist list` to see who is currently being tracked.');
         }
         
         if (!usersInChannel) {
             return message.channel.send('No users are currently being tracked in this channel.');
         }
         
-        // Find the user ID matching the provided username (case-insensitive)
+        // Untrack logic
         let userToUntrack = null;
         let userIdToUntrack = null;
-
         for (const userId in usersInChannel) {
             if (usersInChannel[userId].anilistUsername.toLowerCase() === usernameToUntrack.toLowerCase()) {
-                userToUntrack = usersInChannel[userId];
+                userToUntrack = usersIn-channel[userId];
                 userIdToUntrack = userId;
                 break;
             }
         }
-
         if (!userToUntrack) {
             return message.channel.send(`**${usernameToUntrack}** is not being tracked in this channel.`);
         }
-
-        // Database deletion using the composite key
         const sql = `DELETE FROM tracked_users WHERE channelId = ? AND anilistUserId = ?`;
         db.run(sql, [channelId, userIdToUntrack], (err) => {
             if (err) {
                 console.error("DB Error on untrack:", err.message);
                 return message.channel.send("An error occurred while trying to untrack this user.");
             }
-            
-            // Also update our in-memory object
             delete trackedUsers[channelId][userIdToUntrack];
-            
-            // If the channel no longer has any tracked users, remove the channel key itself
             if (Object.keys(trackedUsers[channelId]).length === 0) {
                 delete trackedUsers[channelId];
             }
-
             message.channel.send(`Stopped tracking **${userToUntrack.anilistUsername}** in this channel.`);
         });
     }
