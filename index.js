@@ -55,6 +55,10 @@ db.serialize(() => {
         console.log(
             `Loaded ${rows.length} tracked entries from the database into memory.`,
         );
+
+        // Only log in to Discord AFTER the database is fully loaded.
+        console.log("Database loaded. Logging into Discord...");
+        client.login(process.env.DISCORD_TOKEN);
     });
 });
 
@@ -65,11 +69,6 @@ const client = new Client({
         GatewayIntentBits.GuildMessages,
         GatewayIntentBits.MessageContent, // This is required!
     ],
-});
-
-// When the client is ready, run this code (only once)
-client.on("ready", () => {
-    console.log(`Logged in as ${client.user.tag}!`);
 });
 
 const fetch = require("node-fetch");
@@ -202,10 +201,12 @@ async function checkAniListActivity(channelId, anilistUserId) {
     }
 }
 
-// When the bot is ready, start a loop to check for updates every 5 minutes
+// When the bot is ready, run ALL startup logic
 client.on("ready", () => {
+    // 1. Log that the bot is online.
     console.log(`Logged in as ${client.user.tag}!`);
 
+    // 2. Start the five-minute checking interval.
     setInterval(() => {
         console.log("Checking for new AniList activity...");
         // Loop through each channel being tracked
