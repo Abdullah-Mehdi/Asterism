@@ -27,7 +27,7 @@ const client = new Client({
     ],
 });
 
-// --- YOUR ANILIST CHECKING LOGIC (NO CHANGES NEEDED HERE) ---
+// ---ANILIST CHECKING LOGIC---
 async function checkAniListActivity(channelId, anilistUserId) {
     const trackingInfo = trackedUsers[channelId]?.[anilistUserId];
     if (!trackingInfo) return;
@@ -67,7 +67,7 @@ async function checkAniListActivity(channelId, anilistUserId) {
                             url: `https://anilist.co/user/${anilistUsername}/`,
                         })
                         .setDescription(
-                            `${latestActivity.status} ${latestActivity.progress || ""} of **[${mediaTitle}](${latestActivity.media.siteUrl})**`,
+                            `${latestActivity.status} ${latestActivity.progress || ""} ... **[${mediaTitle}](${latestActivity.media.siteUrl})**`,
                         )
                         .setThumbnail(latestActivity.media.coverImage.large)
                         .setTimestamp(latestActivity.createdAt * 1000)
@@ -108,7 +108,7 @@ client.on("ready", () => {
     }, 300000); // 5 minutes
 });
 
-// --- NEW SLASH COMMAND HANDLER ---
+// --- SLASH COMMAND HANDLER ---
 client.on("interactionCreate", async (interaction) => {
     if (!interaction.isChatInputCommand()) return;
 
