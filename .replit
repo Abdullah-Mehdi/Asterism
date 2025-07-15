@@ -6,7 +6,6 @@ channel = "stable-24_05"
 
 [deployment]
 run = ["sh", "-c", "npm run start"]
-
-[[ports]]
-localPort = 8080
-externalPort = 80
+build = ["sh", "-c", "npm install"]
+deploymentTarget = "gce"
+ignorePorts = true
