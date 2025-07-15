@@ -94,7 +94,6 @@ async function checkAniListActivity(channelId, anilistUserId) {
 
 // BOT STARTUP LOGIC (No changes needed)
 client.on("ready", () => {
-    // 1. Log that the bot is online.
     console.log(`Logged in as ${client.user.tag}!`);
     setInterval(() => {
         console.log("Checking for new AniList activity...");
