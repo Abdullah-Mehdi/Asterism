@@ -10,9 +10,17 @@ const {
     Client,
     GatewayIntentBits,
     EmbedBuilder,
-    MessageFlags,
+    MessageFlags, // This is already correctly imported, which is great!
 } = require("discord.js");
 const fetch = require("node-fetch");
+
+// --- FIX #1: THE GLOBAL SAFETY NET ---
+// This listener catches low-level promise errors that would otherwise crash the bot.
+// This is the most important change to ensure stability.
+process.on("unhandledRejection", (error) => {
+    console.error("CRITICAL: Unhandled Promise Rejection:", error);
+    // We log the error but do not exit. This allows the bot to survive the crash loop.
+});
 
 let trackedUsers = {}; // in-memory copy for speed
 let db; // Initialize the database in our main async function
@@ -22,7 +30,7 @@ const client = new Client({
     intents: [GatewayIntentBits.Guilds],
 });
 
-// ANILIST CHECKING LOGIC
+// ANILIST CHECKING LOGIC (No changes needed here, it's perfect)
 async function checkAniListActivity(channelId, anilistUserId) {
     const trackingInfo = trackedUsers[channelId]?.[anilistUserId];
     if (!trackingInfo) return;
@@ -62,8 +70,8 @@ async function checkAniListActivity(channelId, anilistUserId) {
                             url: `https://anilist.co/user/${anilistUsername}/`,
                         })
                         .setDescription(
-                            `${latestActivity.status} ${latestActivity.progress || ""} ... **[${mediaTitle}](${latestActivity.media.siteUrl})**`,
-                        )
+                            `${latestActivity.status} ${latestActivity.progress || ""} of **[${mediaTitle}](${latestActivity.media.siteUrl})**`,
+                        ) // Note: I removed the extra "..." from the original code
                         .setThumbnail(latestActivity.media.coverImage.large)
                         .setTimestamp(latestActivity.createdAt * 1000)
                         .setFooter({ text: "From AniList" });
@@ -72,7 +80,6 @@ async function checkAniListActivity(channelId, anilistUserId) {
                 const newActivityId = latestActivity.id;
                 const sql = `UPDATE tracked_users SET lastActivityId = ? WHERE channelId = ? AND anilistUserId = ?`;
                 await db.run(sql, [newActivityId, channelId, anilistUserId]);
-
                 trackedUsers[channelId][anilistUserId].lastActivityId =
                     newActivityId;
                 console.log(
@@ -85,7 +92,7 @@ async function checkAniListActivity(channelId, anilistUserId) {
     }
 }
 
-// BOT STARTUP LOGIC
+// BOT STARTUP LOGIC (No changes needed)
 client.on("ready", () => {
     console.log(`Logged in as ${client.user.tag}!`);
     setInterval(() => {
@@ -101,24 +108,24 @@ client.on("ready", () => {
 // SLASH COMMAND HANDLER
 client.on("interactionCreate", async (interaction) => {
     if (!interaction.isChatInputCommand()) return;
-
     const { commandName } = interaction;
 
-    // Still defer, as it's best practice.
     try {
+        // --- FIX #2: Use flags instead of the deprecated 'ephemeral' boolean ---
         await interaction.deferReply({
-            ephemeral: ["list", "help", "untrack"].includes(commandName),
+            flags: ["list", "help", "untrack"].includes(commandName)
+                ? [MessageFlags.Ephemeral]
+                : undefined,
         });
     } catch (error) {
         console.error(
-            "Failed to defer reply, the interaction is likely too old:",
+            "Fatal: Failed to defer reply. The interaction is likely invalid.",
             error,
         );
-        return; // Can't do anything if we can't even defer.
+        return;
     }
 
     try {
-        // COMMAND LOGIC
         if (commandName === "help") {
             const helpEmbed = new EmbedBuilder()
                 .setColor("#C3B1E1")
@@ -188,6 +195,7 @@ client.on("interactionCreate", async (interaction) => {
                 anilistUserId,
                 null,
             ]);
+            // Add a confirmation log
             console.log(
                 `[SUCCESS] Database write for ${anilistUsername} has completed.`,
             );
@@ -235,38 +243,33 @@ client.on("interactionCreate", async (interaction) => {
             );
         }
     } catch (error) {
-        // ERROR HANDLER
         console.error(
             `An error occurred while executing the /${commandName} command:`,
             error,
         );
-
-        // Use followUp to send a new, separate message
-        await interaction.followUp({
-            content: "There was an error while executing this command!",
-            ephemeral: true,
-        });
+        try {
+            await interaction.followUp({
+                content: "There was an error while executing this command!",
+                ephemeral: true, // The boolean is correct for followUp
+            });
+        } catch (followUpError) {
+            console.error(
+                "Could not even send a followup error message:",
+                followUpError,
+            );
+        }
     }
 });
 
-// MAIN STARTUP FUNCTION
-// Wrap startup in an async function to use 'await' for opening the database.
+// MAIN STARTUP FUNCTION (No changes needed)
 async function startBot() {
     try {
-        // Open the database connection
-        db = await open({
-            filename: "./bot.db",
-            driver: sqlite3.Database,
-        });
+        db = await open({ filename: "./bot.db", driver: sqlite3.Database });
         console.log("Connected to the SQLite database.");
-
-        // Create the table if it doesn't exist
         await db.exec(
             `CREATE TABLE IF NOT EXISTS tracked_users (channelId TEXT NOT NULL, anilistUserId INTEGER NOT NULL, anilistUsername TEXT NOT NULL, lastActivityId INTEGER, PRIMARY KEY (channelId, anilistUserId))`,
         );
         console.log("tracked_users table is ready.");
-
-        // Load all users from the database into memory
         const rows = await db.all("SELECT * FROM tracked_users");
         rows.forEach((row) => {
             if (!trackedUsers[row.channelId]) trackedUsers[row.channelId] = {};
@@ -278,13 +281,11 @@ async function startBot() {
         console.log(
             `Loaded ${rows.length} tracked entries from the database into memory.`,
         );
-
-        // Finally, log in to Discord
         console.log("Database loaded. Logging into Discord...");
         client.login(token);
     } catch (error) {
         console.error("Failed to start the bot:", error);
-        process.exit(1); // Exit if we can't connect to the DB
+        process.exit(1);
     }
 }
 
