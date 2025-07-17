@@ -1,36 +1,34 @@
-// 'sqlite' package for modern async/await support
+// sqlite async/await ke liye
 const { open } = require("sqlite");
 const sqlite3 = require("sqlite3").verbose();
 
-// Import your config
+// config file se token import karna
 const { token } = require("./config.json");
 
-// Import necessary classes from discord.js
+// discord.js ke zaroori classes
 const {
     Client,
     GatewayIntentBits,
     EmbedBuilder,
-    MessageFlags, // This is already correctly imported, which is great!
+    MessageFlags,
 } = require("discord.js");
 const fetch = require("node-fetch");
 
-// --- FIX #1: THE GLOBAL SAFETY NET ---
-// This listener catches low-level promise errors that would otherwise crash the bot.
-// This is the most important change to ensure stability.
+// agar koi promise reject ho jaye to bot crash na ho
 process.on("unhandledRejection", (error) => {
     console.error("CRITICAL: Unhandled Promise Rejection:", error);
-    // We log the error but do not exit. This allows the bot to survive the crash loop.
+    // error log kar dete hain lekin bot ko crash nahi karte
 });
 
-let trackedUsers = {}; // in-memory copy for speed
-let db; // Initialize the database in our main async function
+let trackedUsers = {}; // memory mein users ka data rakhe ga
+let db; // database ka instance
 
-// Create a new client instance
+// discord client banate hain
 const client = new Client({
     intents: [GatewayIntentBits.Guilds],
 });
 
-// ANILIST CHECKING LOGIC (No changes needed here, it's perfect)
+// AniList activity check karne ka function
 async function checkAniListActivity(channelId, anilistUserId) {
     const trackingInfo = trackedUsers[channelId]?.[anilistUserId];
     if (!trackingInfo) return;
@@ -71,7 +69,7 @@ async function checkAniListActivity(channelId, anilistUserId) {
                         })
                         .setDescription(
                             `${latestActivity.status} ${latestActivity.progress || ""} of **[${mediaTitle}](${latestActivity.media.siteUrl})**`,
-                        ) // Note: I removed the extra "..." from the original code
+                        )
                         .setThumbnail(latestActivity.media.coverImage.large)
                         .setTimestamp(latestActivity.createdAt * 1000)
                         .setFooter({ text: "From AniList" });
@@ -92,7 +90,7 @@ async function checkAniListActivity(channelId, anilistUserId) {
     }
 }
 
-// BOT STARTUP LOGIC (No changes needed)
+// bot ready hone par
 client.on("ready", () => {
     console.log(`Logged in as ${client.user.tag}!`);
     setInterval(() => {
@@ -102,16 +100,16 @@ client.on("ready", () => {
                 checkAniListActivity(channelId, anilistUserId);
             }
         }
-    }, 300000);
+    }, 300000); // har 5 minute mein check karte hain
 });
 
-// SLASH COMMAND HANDLER
+// slash commands handle karte hain
 client.on("interactionCreate", async (interaction) => {
     if (!interaction.isChatInputCommand()) return;
     const { commandName } = interaction;
 
     try {
-        // --- FIX #2: Use flags instead of the deprecated 'ephemeral' boolean ---
+        // ephemeral replies ke liye flags use karte hain
         await interaction.deferReply({
             flags: ["list", "help", "untrack"].includes(commandName)
                 ? [MessageFlags.Ephemeral]
@@ -195,7 +193,7 @@ client.on("interactionCreate", async (interaction) => {
                 anilistUserId,
                 null,
             ]);
-            // Add a confirmation log
+            // database mein save ho gaya
             console.log(
                 `[SUCCESS] Database write for ${anilistUsername} has completed.`,
             );
@@ -250,7 +248,7 @@ client.on("interactionCreate", async (interaction) => {
         try {
             await interaction.followUp({
                 content: "There was an error while executing this command!",
-                ephemeral: true, // The boolean is correct for followUp
+                ephemeral: true,
             });
         } catch (followUpError) {
             console.error(
@@ -261,7 +259,7 @@ client.on("interactionCreate", async (interaction) => {
     }
 });
 
-// MAIN STARTUP FUNCTION (No changes needed)
+// bot ko start karne ka main function
 async function startBot() {
     try {
         db = await open({ filename: "./bot.db", driver: sqlite3.Database });
@@ -289,5 +287,5 @@ async function startBot() {
     }
 }
 
-// Run the main startup function
+// bot shuru karte hain
 startBot();
