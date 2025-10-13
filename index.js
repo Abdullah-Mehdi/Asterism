@@ -23,6 +23,17 @@ process.on("unhandledRejection", (error) => {
 let trackedUsers = {}; // memory mein users ka data rakhe ga
 let db; // database ka instance
 
+// AniList profile colors ko hex codes mein convert karne ke liye mapping
+const anilistColorMap = {
+    blue: "#3DB4F2",
+    purple: "#C063FF",
+    pink: "#FC9DD6",
+    orange: "#EF881A",
+    red: "#E13333",
+    green: "#4CCA51",
+    gray: "#677B94",
+};
+
 // discord client banate hain
 const client = new Client({
     intents: [GatewayIntentBits.Guilds],
@@ -85,7 +96,9 @@ async function checkAniListActivity(channelId, anilistUserId) {
                     newActivities.reverse();
                     
                     // Determine embed color (use profile color or default)
-                    const embedColor = userColor || "#C3B1E1";
+                    const embedColor = userColor 
+                        ? (anilistColorMap[userColor.toLowerCase()] || "#C3B1E1")
+                        : "#C3B1E1";
                     
                     for (const activity of newActivities) {
                         const mediaTitle =
