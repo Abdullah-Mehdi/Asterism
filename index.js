@@ -152,6 +152,16 @@ async function checkAniListActivity(channelId, anilistUserId) {
 // bot ready hone par
 client.on("ready", () => {
     console.log(`Logged in as ${client.user.tag}!`);
+    
+    // Immediately check once on startup
+    console.log("Checking for new AniList activity (initial check)...");
+    for (const channelId in trackedUsers) {
+        for (const anilistUserId in trackedUsers[channelId]) {
+            checkAniListActivity(channelId, anilistUserId);
+        }
+    }
+    
+    // Then set up the interval for regular checks
     setInterval(() => {
         console.log("Checking for new AniList activity...");
         for (const channelId in trackedUsers) {
