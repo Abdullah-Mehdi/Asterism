@@ -89,21 +89,26 @@ async function checkAniListActivity(channelId, anilistUserId) {
                 : [activities[0]]; // If no lastActivityId, only show the most recent one
 
             if (newActivities.length > 0) {
+                // Cap at 15 activities to prevent spam, but still update to latest
+                const activitiesToShow = newActivities.slice(0, 15);
+                const skippedCount = newActivities.length - activitiesToShow.length;
+                
                 console.log(
-                    `${newActivities.length} new activity/activities for ${anilistUsername}`,
+                    `${newActivities.length} new activity/activities for ${anilistUsername}` +
+                    (skippedCount > 0 ? ` (showing ${activitiesToShow.length}, skipping ${skippedCount} older ones)` : ''),
                 );
                 const channel = await client.channels.fetch(channelId);
 
                 if (channel) {
                     // Sort activities oldest to newest for posting
-                    newActivities.reverse();
+                    activitiesToShow.reverse();
 
                     // Determine embed color (use profile color or default)
                     const embedColor = userColor 
                         ? (anilistColorMap[userColor.toLowerCase()] || "#C3B1E1")
                         : "#C3B1E1";
                     
-                    for (const activity of newActivities) {
+                    for (const activity of activitiesToShow) {
                         const mediaTitle =
                             activity.media.title.english ||
                             activity.media.title.romaji;
