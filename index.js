@@ -34,54 +34,88 @@ async function checkAniListActivity(channelId, anilistUserId) {
     if (!trackingInfo) return;
 
     const { anilistUsername, lastActivityId } = trackingInfo;
-    const query = `query ($userId: Int) { Page(page: 1, perPage: 1) { activities(userId: $userId, sort: ID_DESC, type: MEDIA_LIST) { ... on ListActivity { id status progress createdAt media { title { romaji, english }, coverImage { large }, siteUrl } } } } }`;
+    
+    // First fetch user profile info (avatar and color)
+    const userQuery = `query ($userId: Int) { User(id: $userId) { avatar { large }, options { profileColor } } }`;
+    const activityQuery = `query ($userId: Int) { Page(page: 1, perPage: 50) { activities(userId: $userId, sort: ID_DESC, type: MEDIA_LIST) { ... on ListActivity { id status progress createdAt media { title { romaji, english }, coverImage { large }, siteUrl } } } } }`;
     const variables = { userId: anilistUserId };
     const url = "https://graphql.anilist.co";
-    const options = {
-        method: "POST",
-        headers: {
-            "Content-Type": "application/json",
-            Accept: "application/json",
-        },
-        body: JSON.stringify({ query, variables }),
-    };
-
+    
     try {
-        const response = await fetch(url, options);
-        const data = await response.json();
+        // Fetch user profile data
+        const userResponse = await fetch(url, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                Accept: "application/json",
+            },
+            body: JSON.stringify({ query: userQuery, variables }),
+        });
+        const userData = await userResponse.json();
+        const userAvatar = userData.data?.User?.avatar?.large;
+        const userColor = userData.data?.User?.options?.profileColor;
+        
+        // Fetch activities
+        const activityResponse = await fetch(url, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                Accept: "application/json",
+            },
+            body: JSON.stringify({ query: activityQuery, variables }),
+        });
+        const activityData = await activityResponse.json();
 
-        if (data.data.Page.activities && data.data.Page.activities.length > 0) {
-            const latestActivity = data.data.Page.activities[0];
-            if (latestActivity.id !== lastActivityId) {
+        if (activityData.data.Page.activities && activityData.data.Page.activities.length > 0) {
+            const activities = activityData.data.Page.activities;
+            
+            // Find all new activities (those with ID greater than lastActivityId)
+            const newActivities = lastActivityId 
+                ? activities.filter(activity => activity.id > lastActivityId)
+                : [activities[0]]; // If no lastActivityId, only show the most recent one
+            
+            if (newActivities.length > 0) {
                 console.log(
-                    `New activity for ${anilistUsername}: ${latestActivity.id}`,
+                    `${newActivities.length} new activity/activities for ${anilistUsername}`,
                 );
                 const channel = await client.channels.fetch(channelId);
+                
                 if (channel) {
-                    const mediaTitle =
-                        latestActivity.media.title.english ||
-                        latestActivity.media.title.romaji;
-                    const embed = new EmbedBuilder()
-                        .setColor("#C3B1E1")
-                        .setAuthor({
-                            name: `${anilistUsername}'s Activity`,
-                            url: `https://anilist.co/user/${anilistUsername}/`,
-                        })
-                        .setDescription(
-                            `${latestActivity.status} ${latestActivity.progress || ""} of **[${mediaTitle}](${latestActivity.media.siteUrl})**`,
-                        )
-                        .setThumbnail(latestActivity.media.coverImage.large)
-                        .setTimestamp(latestActivity.createdAt * 1000)
-                        .setFooter({ text: "From AniList" });
-                    channel.send({ embeds: [embed] });
+                    // Sort activities oldest to newest for posting
+                    newActivities.reverse();
+                    
+                    // Determine embed color (use profile color or default)
+                    const embedColor = userColor || "#C3B1E1";
+                    
+                    for (const activity of newActivities) {
+                        const mediaTitle =
+                            activity.media.title.english ||
+                            activity.media.title.romaji;
+                        const embed = new EmbedBuilder()
+                            .setColor(embedColor)
+                            .setAuthor({
+                                name: `${anilistUsername}'s Activity`,
+                                iconURL: userAvatar,
+                                url: `https://anilist.co/user/${anilistUsername}/`,
+                            })
+                            .setDescription(
+                                `${activity.status} ${activity.progress || ""} of **[${mediaTitle}](${activity.media.siteUrl})**`,
+                            )
+                            .setThumbnail(activity.media.coverImage.large)
+                            .setTimestamp(activity.createdAt * 1000)
+                            .setFooter({ text: "From AniList" });
+                        await channel.send({ embeds: [embed] });
+                    }
                 }
-                const newActivityId = latestActivity.id;
+                
+                // Update to the most recent activity ID
+                const mostRecentActivityId = activities[0].id;
                 const sql = `UPDATE tracked_users SET lastActivityId = ? WHERE channelId = ? AND anilistUserId = ?`;
-                await db.run(sql, [newActivityId, channelId, anilistUserId]);
+                await db.run(sql, [mostRecentActivityId, channelId, anilistUserId]);
                 trackedUsers[channelId][anilistUserId].lastActivityId =
-                    newActivityId;
+                    mostRecentActivityId;
                 console.log(
-                    `Updated lastActivityId to ${newActivityId} for channel ${channelId} in DB.`,
+                    `Updated lastActivityId to ${mostRecentActivityId} for channel ${channelId} in DB.`,
                 );
             }
         }
@@ -100,7 +134,7 @@ client.on("ready", () => {
                 checkAniListActivity(channelId, anilistUserId);
             }
         }
-    }, 300000); // har 5 minute mein check karte hain
+    }, 600000); // har 10 minute mein check karte hain
 });
 
 // slash commands handle karte hain
