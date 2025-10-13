@@ -48,7 +48,7 @@ async function checkAniListActivity(channelId, anilistUserId) {
 
     // First fetch user profile info (avatar and color)
     const userQuery = `query ($userId: Int) { User(id: $userId) { avatar { large }, options { profileColor } } }`;
-    const activityQuery = `query ($userId: Int) { Page(page: 1, perPage: 50) { activities(userId: $userId, sort: ID_DESC, type: MEDIA_LIST) { ... on ListActivity { id status progress createdAt media { title { romaji, english }, coverImage { large }, siteUrl } } } } }`;
+    const activityQuery = `query ($userId: Int) { Page(page: 1, perPage: 50) { activities(userId: $userId, sort: ID_DESC, type: MEDIA_LIST) { ... on ListActivity { id status progress createdAt media { title { romaji, english }, coverImage { large }, siteUrl } score notes repeat } } } }`;
     const variables = { userId: anilistUserId };
     const url = "https://graphql.anilist.co";
 
@@ -112,6 +112,29 @@ async function checkAniListActivity(channelId, anilistUserId) {
                         const mediaTitle =
                             activity.media.title.english ||
                             activity.media.title.romaji;
+                        
+                        // Build description with optional fields
+                        let description = `${activity.status} ${activity.progress || ""} - **[${mediaTitle}](${activity.media.siteUrl})**`;
+                        
+                        // Add rating if exists
+                        if (activity.score) {
+                            description += `\n⭐ Rating: ${activity.score}/100`;
+                        }
+                        
+                        // Add repeat count if exists and greater than 0
+                        if (activity.repeat && activity.repeat > 0) {
+                            description += `\n🔁 Rewatch/Reread: ${activity.repeat}`;
+                        }
+                        
+                        // Add notes if exists
+                        if (activity.notes && activity.notes.trim()) {
+                            // Truncate long notes to prevent embed overflow
+                            const truncatedNotes = activity.notes.length > 100 
+                                ? activity.notes.substring(0, 97) + "..." 
+                                : activity.notes;
+                            description += `\n📝 *"${truncatedNotes}"*`;
+                        }
+                        
                         const embed = new EmbedBuilder()
                             .setColor(embedColor)
                             .setAuthor({
@@ -119,9 +142,7 @@ async function checkAniListActivity(channelId, anilistUserId) {
                                 iconURL: userAvatar,
                                 url: `https://anilist.co/user/${anilistUsername}/`,
                             })
-                            .setDescription(
-                                `${activity.status} ${activity.progress || ""} - **[${mediaTitle}](${activity.media.siteUrl})**`,
-                            )
+                            .setDescription(description)
                             .setThumbnail(activity.media.coverImage.large)
                             .setTimestamp(activity.createdAt * 1000)
                             .setFooter({ text: "From AniList" });
