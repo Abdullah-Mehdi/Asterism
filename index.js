@@ -45,13 +45,13 @@ async function checkAniListActivity(channelId, anilistUserId) {
     if (!trackingInfo) return;
 
     const { anilistUsername, lastActivityId } = trackingInfo;
-    
+
     // First fetch user profile info (avatar and color)
     const userQuery = `query ($userId: Int) { User(id: $userId) { avatar { large }, options { profileColor } } }`;
     const activityQuery = `query ($userId: Int) { Page(page: 1, perPage: 50) { activities(userId: $userId, sort: ID_DESC, type: MEDIA_LIST) { ... on ListActivity { id status progress createdAt media { title { romaji, english }, coverImage { large }, siteUrl } } } } }`;
     const variables = { userId: anilistUserId };
     const url = "https://graphql.anilist.co";
-    
+
     try {
         // Fetch user profile data
         const userResponse = await fetch(url, {
@@ -65,7 +65,7 @@ async function checkAniListActivity(channelId, anilistUserId) {
         const userData = await userResponse.json();
         const userAvatar = userData.data?.User?.avatar?.large;
         const userColor = userData.data?.User?.options?.profileColor;
-        
+
         // Fetch activities
         const activityResponse = await fetch(url, {
             method: "POST",
@@ -77,24 +77,27 @@ async function checkAniListActivity(channelId, anilistUserId) {
         });
         const activityData = await activityResponse.json();
 
-        if (activityData.data.Page.activities && activityData.data.Page.activities.length > 0) {
+        if (
+            activityData.data.Page.activities &&
+            activityData.data.Page.activities.length > 0
+        ) {
             const activities = activityData.data.Page.activities;
-            
+
             // Find all new activities (those with ID greater than lastActivityId)
-            const newActivities = lastActivityId 
-                ? activities.filter(activity => activity.id > lastActivityId)
+            const newActivities = lastActivityId
+                ? activities.filter((activity) => activity.id > lastActivityId)
                 : [activities[0]]; // If no lastActivityId, only show the most recent one
-            
+
             if (newActivities.length > 0) {
                 console.log(
                     `${newActivities.length} new activity/activities for ${anilistUsername}`,
                 );
                 const channel = await client.channels.fetch(channelId);
-                
+
                 if (channel) {
                     // Sort activities oldest to newest for posting
                     newActivities.reverse();
-                    
+
                     // Determine embed color (use profile color or default)
                     const embedColor = userColor 
                         ? (anilistColorMap[userColor.toLowerCase()] || "#C3B1E1")
@@ -112,7 +115,7 @@ async function checkAniListActivity(channelId, anilistUserId) {
                                 url: `https://anilist.co/user/${anilistUsername}/`,
                             })
                             .setDescription(
-                                `${activity.status} ${activity.progress || ""} of **[${mediaTitle}](${activity.media.siteUrl})**`,
+                                `${activity.status} ${activity.progress || ""} - **[${mediaTitle}](${activity.media.siteUrl})**`,
                             )
                             .setThumbnail(activity.media.coverImage.large)
                             .setTimestamp(activity.createdAt * 1000)
@@ -120,11 +123,15 @@ async function checkAniListActivity(channelId, anilistUserId) {
                         await channel.send({ embeds: [embed] });
                     }
                 }
-                
+
                 // Update to the most recent activity ID
                 const mostRecentActivityId = activities[0].id;
                 const sql = `UPDATE tracked_users SET lastActivityId = ? WHERE channelId = ? AND anilistUserId = ?`;
-                await db.run(sql, [mostRecentActivityId, channelId, anilistUserId]);
+                await db.run(sql, [
+                    mostRecentActivityId,
+                    channelId,
+                    anilistUserId,
+                ]);
                 trackedUsers[channelId][anilistUserId].lastActivityId =
                     mostRecentActivityId;
                 console.log(
