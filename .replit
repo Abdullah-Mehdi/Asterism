@@ -9,3 +9,6 @@ run = ["sh", "-c", "npm run start"]
 build = ["sh", "-c", "npm install"]
 deploymentTarget = "gce"
 ignorePorts = true
+
+[agent]
+expertMode = true
