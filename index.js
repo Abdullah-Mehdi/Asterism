@@ -154,9 +154,15 @@ client.on("ready", () => {
     console.log(`Logged in as ${client.user.tag}!`);
     
     // Immediately check once on startup
-    console.log("Checking for new AniList activity (initial check)...");
+    const userCount = Object.keys(trackedUsers).reduce((total, channelId) => {
+        return total + Object.keys(trackedUsers[channelId]).length;
+    }, 0);
+    
+    console.log(`Checking for new AniList activity (initial check)... Found ${userCount} tracked users.`);
+    
     for (const channelId in trackedUsers) {
         for (const anilistUserId in trackedUsers[channelId]) {
+            console.log(`Initial check: ${trackedUsers[channelId][anilistUserId].anilistUsername}`);
             checkAniListActivity(channelId, anilistUserId);
         }
     }
