@@ -22,6 +22,7 @@ process.on("unhandledRejection", (error) => {
 
 let trackedUsers = {}; // memory mein users ka data rakhe ga
 let db; // database ka instance
+const PROFILE_CACHE_DURATION = 86400000; // 24 hours in milliseconds
 
 // AniList profile colors ko hex codes mein convert karne ke liye mapping
 const anilistColorMap = {
@@ -39,43 +40,109 @@ const client = new Client({
     intents: [GatewayIntentBits.Guilds],
 });
 
+// Helper function to get the correct title based on user preference
+function getPreferredTitle(mediaTitles, preference) {
+    switch (preference) {
+        case "ENGLISH":
+            return mediaTitles.english || mediaTitles.romaji || mediaTitles.native;
+        case "NATIVE":
+            return mediaTitles.native || mediaTitles.romaji || mediaTitles.english;
+        case "ROMAJI":
+        case "ROMAJI_STYLISED":
+        default:
+            return mediaTitles.romaji || mediaTitles.english || mediaTitles.native;
+    }
+}
+
 // AniList activity check karne ka function
 async function checkAniListActivity(channelId, anilistUserId) {
     const trackingInfo = trackedUsers[channelId]?.[anilistUserId];
     if (!trackingInfo) return;
 
-    const { anilistUsername, lastActivityId } = trackingInfo;
-
-    // First fetch user profile info (avatar and color)
-    const userQuery = `query ($userId: Int) { User(id: $userId) { avatar { large }, options { profileColor } } }`;
-    const activityQuery = `query ($userId: Int) { Page(page: 1, perPage: 50) { activities(userId: $userId, sort: ID_DESC, type: MEDIA_LIST) { ... on ListActivity { id status progress createdAt media { title { romaji, english }, coverImage { large }, siteUrl } score notes repeat } } } }`;
-    const variables = { userId: anilistUserId };
+    const { anilistUsername, lastActivityId, userAvatar, userColor, titleLanguage, profileLastUpdated } = trackingInfo;
     const url = "https://graphql.anilist.co";
+    const now = Date.now();
+    
+    // Check if we need to refresh profile data (older than 24 hours or missing)
+    const needsProfileRefresh = !profileLastUpdated || (now - profileLastUpdated) > PROFILE_CACHE_DURATION;
 
     try {
-        // Fetch user profile data
-        const userResponse = await fetch(url, {
+        let currentAvatar = userAvatar;
+        let currentColor = userColor;
+        let currentTitleLanguage = titleLanguage || "ROMAJI";
+        
+        // Combined query: Fetch both user profile (if needed) and activities in ONE request
+        const combinedQuery = needsProfileRefresh
+            ? `query ($userId: Int) { 
+                User(id: $userId) { 
+                    avatar { large }, 
+                    options { profileColor, titleLanguage } 
+                }
+                Page(page: 1, perPage: 50) { 
+                    activities(userId: $userId, sort: ID_DESC, type: MEDIA_LIST) { 
+                        ... on ListActivity { 
+                            id status progress createdAt 
+                            media { 
+                                title { romaji, english, native }, 
+                                coverImage { large }, 
+                                siteUrl 
+                            } 
+                            score notes repeat 
+                        } 
+                    } 
+                }
+            }`
+            : `query ($userId: Int) { 
+                Page(page: 1, perPage: 50) { 
+                    activities(userId: $userId, sort: ID_DESC, type: MEDIA_LIST) { 
+                        ... on ListActivity { 
+                            id status progress createdAt 
+                            media { 
+                                title { romaji, english, native }, 
+                                coverImage { large }, 
+                                siteUrl 
+                            } 
+                            score notes repeat 
+                        } 
+                    } 
+                }
+            }`;
+        
+        const variables = { userId: anilistUserId };
+        
+        // Single API call for everything
+        const response = await fetch(url, {
             method: "POST",
             headers: {
                 "Content-Type": "application/json",
                 Accept: "application/json",
             },
-            body: JSON.stringify({ query: userQuery, variables }),
+            body: JSON.stringify({ query: combinedQuery, variables }),
         });
-        const userData = await userResponse.json();
-        const userAvatar = userData.data?.User?.avatar?.large;
-        const userColor = userData.data?.User?.options?.profileColor;
-
-        // Fetch activities
-        const activityResponse = await fetch(url, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                Accept: "application/json",
-            },
-            body: JSON.stringify({ query: activityQuery, variables }),
-        });
-        const activityData = await activityResponse.json();
+        const data = await response.json();
+        
+        // Update profile data if we fetched it
+        if (needsProfileRefresh && data.data?.User) {
+            currentAvatar = data.data.User.avatar?.large;
+            currentColor = data.data.User.options?.profileColor;
+            currentTitleLanguage = data.data.User.options?.titleLanguage || "ROMAJI";
+            
+            // Update database with new profile data
+            await db.run(
+                `UPDATE tracked_users SET userAvatar = ?, userColor = ?, titleLanguage = ?, profileLastUpdated = ? WHERE channelId = ? AND anilistUserId = ?`,
+                [currentAvatar, currentColor, currentTitleLanguage, now, channelId, anilistUserId]
+            );
+            
+            // Update memory cache
+            trackedUsers[channelId][anilistUserId].userAvatar = currentAvatar;
+            trackedUsers[channelId][anilistUserId].userColor = currentColor;
+            trackedUsers[channelId][anilistUserId].titleLanguage = currentTitleLanguage;
+            trackedUsers[channelId][anilistUserId].profileLastUpdated = now;
+            
+            console.log(`✓ Refreshed profile data for ${anilistUsername}`);
+        }
+        
+        const activityData = data.data;
 
         if (
             activityData.data.Page.activities &&
@@ -104,14 +171,12 @@ async function checkAniListActivity(channelId, anilistUserId) {
                     activitiesToShow.reverse();
 
                     // Determine embed color (use profile color or default)
-                    const embedColor = userColor 
-                        ? (anilistColorMap[userColor.toLowerCase()] || "#C3B1E1")
+                    const embedColor = currentColor 
+                        ? (anilistColorMap[currentColor.toLowerCase()] || "#C3B1E1")
                         : "#C3B1E1";
                     
                     for (const activity of activitiesToShow) {
-                        const mediaTitle =
-                            activity.media.title.english ||
-                            activity.media.title.romaji;
+                        const mediaTitle = getPreferredTitle(activity.media.title, currentTitleLanguage);
                         
                         // Build description with optional fields
                         let description = `${activity.status} ${activity.progress || ""} - **[${mediaTitle}](${activity.media.siteUrl})**`;
@@ -139,7 +204,7 @@ async function checkAniListActivity(channelId, anilistUserId) {
                             .setColor(embedColor)
                             .setAuthor({
                                 name: `${anilistUsername}'s Activity`,
-                                iconURL: userAvatar,
+                                iconURL: currentAvatar,
                                 url: `https://anilist.co/user/${anilistUsername}/`,
                             })
                             .setDescription(description)
@@ -158,11 +223,24 @@ async function checkAniListActivity(channelId, anilistUserId) {
                     channelId,
                     anilistUserId,
                 ]);
-                trackedUsers[channelId][anilistUserId].lastActivityId =
-                    mostRecentActivityId;
-                console.log(
-                    `Updated lastActivityId to ${mostRecentActivityId} for channel ${channelId} in DB.`,
+                
+                // Verify the write was successful
+                const verification = await db.get(
+                    `SELECT lastActivityId FROM tracked_users WHERE channelId = ? AND anilistUserId = ?`,
+                    [channelId, anilistUserId]
                 );
+                
+                if (verification && verification.lastActivityId === mostRecentActivityId) {
+                    trackedUsers[channelId][anilistUserId].lastActivityId =
+                        mostRecentActivityId;
+                    console.log(
+                        `✓ Updated lastActivityId to ${mostRecentActivityId} for ${anilistUsername} in DB (verified).`,
+                    );
+                } else {
+                    console.error(
+                        `✗ Database write verification failed for ${anilistUsername}! Expected ${mostRecentActivityId}, got ${verification?.lastActivityId}`,
+                    );
+                }
             }
         }
     } catch (error) {
@@ -260,7 +338,15 @@ client.on("interactionCreate", async (interaction) => {
         } else if (commandName === "track") {
             const anilistUsername = interaction.options.getString("username");
             const channelId = interaction.channelId;
-            const findUserQuery = `query ($username: String) { User(name: $username) { id } }`;
+            
+            // Fetch user ID and profile data in one query
+            const findUserQuery = `query ($username: String) { 
+                User(name: $username) { 
+                    id 
+                    avatar { large }
+                    options { profileColor, titleLanguage }
+                } 
+            }`;
             const response = await fetch("https://graphql.anilist.co", {
                 method: "POST",
                 headers: {
@@ -277,27 +363,55 @@ client.on("interactionCreate", async (interaction) => {
                 return interaction.editReply(
                     `Could not find an AniList user with the username **${anilistUsername}**. Please check spelling.`,
                 );
+            
             const anilistUserId = data.data.User.id;
+            const userAvatar = data.data.User.avatar?.large;
+            const userColor = data.data.User.options?.profileColor;
+            const titleLanguage = data.data.User.options?.titleLanguage || "ROMAJI";
+            const now = Date.now();
+            
             if (trackedUsers[channelId]?.[anilistUserId])
                 return interaction.editReply(
                     `**${anilistUsername}** is already being tracked in this channel.`,
                 );
-            const sql = `INSERT INTO tracked_users (channelId, anilistUsername, anilistUserId, lastActivityId) VALUES (?, ?, ?, ?)`;
+            
+            const sql = `INSERT INTO tracked_users (channelId, anilistUsername, anilistUserId, lastActivityId, userAvatar, userColor, titleLanguage, profileLastUpdated) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`;
             await db.run(sql, [
                 channelId,
                 anilistUsername,
                 anilistUserId,
                 null,
+                userAvatar,
+                userColor,
+                titleLanguage,
+                now,
             ]);
-            // database mein save ho gaya
-            console.log(
-                `[SUCCESS] Database write for ${anilistUsername} has completed.`,
+            
+            // Verify the insert was successful
+            const verification = await db.get(
+                `SELECT * FROM tracked_users WHERE channelId = ? AND anilistUserId = ?`,
+                [channelId, anilistUserId]
             );
-            if (!trackedUsers[channelId]) trackedUsers[channelId] = {};
-            trackedUsers[channelId][anilistUserId] = {
-                anilistUsername: anilistUsername,
-                lastActivityId: null,
-            };
+            
+            if (verification) {
+                console.log(
+                    `✓ [SUCCESS] Database write for ${anilistUsername} completed and verified.`,
+                );
+                if (!trackedUsers[channelId]) trackedUsers[channelId] = {};
+                trackedUsers[channelId][anilistUserId] = {
+                    anilistUsername: anilistUsername,
+                    lastActivityId: null,
+                    userAvatar: userAvatar,
+                    userColor: userColor,
+                    titleLanguage: titleLanguage,
+                    profileLastUpdated: now,
+                };
+            } else {
+                console.error(
+                    `✗ [ERROR] Database write verification failed for ${anilistUsername}!`,
+                );
+                throw new Error("Failed to persist user to database");
+            }
             await interaction.editReply(
                 `Successfully found **${anilistUsername}**. Now tracking them in this channel!`,
             );
@@ -329,12 +443,31 @@ client.on("interactionCreate", async (interaction) => {
                 });
             const sql = `DELETE FROM tracked_users WHERE channelId = ? AND anilistUserId = ?`;
             await db.run(sql, [channelId, userIdToUntrack]);
-            delete trackedUsers[channelId][userIdToUntrack];
-            if (Object.keys(trackedUsers[channelId]).length === 0)
-                delete trackedUsers[channelId];
-            await interaction.editReply(
-                `Stopped tracking **${userToUntrackInfo.anilistUsername}** in this channel.`,
+            
+            // Verify the delete was successful
+            const verification = await db.get(
+                `SELECT * FROM tracked_users WHERE channelId = ? AND anilistUserId = ?`,
+                [channelId, userIdToUntrack]
             );
+            
+            if (!verification) {
+                console.log(
+                    `✓ Successfully deleted ${userToUntrackInfo.anilistUsername} from database (verified).`,
+                );
+                delete trackedUsers[channelId][userIdToUntrack];
+                if (Object.keys(trackedUsers[channelId]).length === 0)
+                    delete trackedUsers[channelId];
+                await interaction.editReply(
+                    `Stopped tracking **${userToUntrackInfo.anilistUsername}** in this channel.`,
+                );
+            } else {
+                console.error(
+                    `✗ Database delete verification failed for ${userToUntrackInfo.anilistUsername}!`,
+                );
+                await interaction.editReply(
+                    `Error: Failed to remove **${userToUntrackInfo.anilistUsername}** from database.`,
+                );
+            }
         }
     } catch (error) {
         console.error(
@@ -360,21 +493,58 @@ async function startBot() {
     try {
         db = await open({ filename: "./bot.db", driver: sqlite3.Database });
         console.log("Connected to the SQLite database.");
+        
+        // Enable WAL mode for better concurrent access and prevent corruption
+        await db.exec("PRAGMA journal_mode = WAL;");
+        
         await db.exec(
-            `CREATE TABLE IF NOT EXISTS tracked_users (channelId TEXT NOT NULL, anilistUserId INTEGER NOT NULL, anilistUsername TEXT NOT NULL, lastActivityId INTEGER, PRIMARY KEY (channelId, anilistUserId))`,
+            `CREATE TABLE IF NOT EXISTS tracked_users (
+                channelId TEXT NOT NULL, 
+                anilistUserId INTEGER NOT NULL, 
+                anilistUsername TEXT NOT NULL, 
+                lastActivityId INTEGER,
+                userAvatar TEXT,
+                userColor TEXT,
+                titleLanguage TEXT DEFAULT 'ROMAJI',
+                profileLastUpdated INTEGER,
+                PRIMARY KEY (channelId, anilistUserId)
+            )`,
         );
         console.log("tracked_users table is ready.");
+        
+        // Migration: Add new columns if they don't exist (for existing databases)
+        try {
+            await db.exec(`ALTER TABLE tracked_users ADD COLUMN userAvatar TEXT`);
+            await db.exec(`ALTER TABLE tracked_users ADD COLUMN userColor TEXT`);
+            await db.exec(`ALTER TABLE tracked_users ADD COLUMN titleLanguage TEXT DEFAULT 'ROMAJI'`);
+            await db.exec(`ALTER TABLE tracked_users ADD COLUMN profileLastUpdated INTEGER`);
+            console.log("✓ Database schema migrated to include profile fields.");
+        } catch (error) {
+            // Columns already exist, which is fine
+            if (!error.message.includes("duplicate column")) {
+                console.log("Database schema already up to date.");
+            }
+        }
+        
+        // Load data from database with detailed logging
         const rows = await db.all("SELECT * FROM tracked_users");
-        rows.forEach((row) => {
+        console.log(`\n=== DATABASE LOAD START ===`);
+        console.log(`Found ${rows.length} tracked entries in database.`);
+        
+        rows.forEach((row, index) => {
             if (!trackedUsers[row.channelId]) trackedUsers[row.channelId] = {};
             trackedUsers[row.channelId][row.anilistUserId] = {
                 anilistUsername: row.anilistUsername,
                 lastActivityId: row.lastActivityId,
+                userAvatar: row.userAvatar,
+                userColor: row.userColor,
+                titleLanguage: row.titleLanguage || "ROMAJI",
+                profileLastUpdated: row.profileLastUpdated,
             };
+            console.log(`  [${index + 1}] User: ${row.anilistUsername} (ID: ${row.anilistUserId}), LastActivityId: ${row.lastActivityId}, Channel: ${row.channelId}`);
         });
-        console.log(
-            `Loaded ${rows.length} tracked entries from the database into memory.`,
-        );
+        
+        console.log(`=== DATABASE LOAD COMPLETE ===\n`);
         console.log("Database loaded. Logging into Discord...");
         client.login(token);
     } catch (error) {
