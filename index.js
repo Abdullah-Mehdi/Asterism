@@ -121,6 +121,12 @@ async function checkAniListActivity(channelId, anilistUserId) {
         });
         const data = await response.json();
         
+        // Validate API response
+        if (!data || !data.data) {
+            console.error(`✗ Invalid API response for ${anilistUsername}:`, data?.errors || "Unknown error");
+            return;
+        }
+        
         // Update profile data if we fetched it
         if (needsProfileRefresh && data.data?.User) {
             currentAvatar = data.data.User.avatar?.large;
@@ -132,6 +138,9 @@ async function checkAniListActivity(channelId, anilistUserId) {
                 `UPDATE tracked_users SET userAvatar = ?, userColor = ?, titleLanguage = ?, profileLastUpdated = ? WHERE channelId = ? AND anilistUserId = ?`,
                 [currentAvatar, currentColor, currentTitleLanguage, now, channelId, anilistUserId]
             );
+            
+            // Checkpoint to persist profile updates
+            await db.exec("PRAGMA wal_checkpoint(PASSIVE);");
             
             // Update memory cache
             trackedUsers[channelId][anilistUserId].userAvatar = currentAvatar;
@@ -145,10 +154,10 @@ async function checkAniListActivity(channelId, anilistUserId) {
         const activityData = data.data;
 
         if (
-            activityData.data.Page.activities &&
-            activityData.data.Page.activities.length > 0
+            activityData?.Page?.activities &&
+            activityData.Page.activities.length > 0
         ) {
-            const activities = activityData.data.Page.activities;
+            const activities = activityData.Page.activities;
 
             // Find all new activities (those with ID greater than lastActivityId)
             const newActivities = lastActivityId
@@ -224,6 +233,9 @@ async function checkAniListActivity(channelId, anilistUserId) {
                     anilistUserId,
                 ]);
                 
+                // Force checkpoint to ensure data is persisted
+                await db.exec("PRAGMA wal_checkpoint(PASSIVE);");
+                
                 // Verify the write was successful
                 const verification = await db.get(
                     `SELECT lastActivityId FROM tracked_users WHERE channelId = ? AND anilistUserId = ?`,
@@ -275,6 +287,16 @@ client.on("ready", () => {
             }
         }
     }, 600000); // har 10 minute mein check karte hain
+    
+    // Periodic database checkpoint every 30 minutes to ensure persistence
+    setInterval(async () => {
+        try {
+            await db.exec("PRAGMA wal_checkpoint(PASSIVE);");
+            console.log("✓ Database checkpoint completed.");
+        } catch (error) {
+            console.error("Database checkpoint error:", error);
+        }
+    }, 1800000); // 30 minutes
 });
 
 // slash commands handle karte hain
@@ -387,6 +409,9 @@ client.on("interactionCreate", async (interaction) => {
                 now,
             ]);
             
+            // Force checkpoint to ensure data is persisted to main database file
+            await db.exec("PRAGMA wal_checkpoint(FULL);");
+            
             // Verify the insert was successful
             const verification = await db.get(
                 `SELECT * FROM tracked_users WHERE channelId = ? AND anilistUserId = ?`,
@@ -443,6 +468,9 @@ client.on("interactionCreate", async (interaction) => {
                 });
             const sql = `DELETE FROM tracked_users WHERE channelId = ? AND anilistUserId = ?`;
             await db.run(sql, [channelId, userIdToUntrack]);
+            
+            // Force checkpoint to ensure deletion is persisted
+            await db.exec("PRAGMA wal_checkpoint(FULL);");
             
             // Verify the delete was successful
             const verification = await db.get(
@@ -513,18 +541,28 @@ async function startBot() {
         console.log("tracked_users table is ready.");
         
         // Migration: Add new columns if they don't exist (for existing databases)
-        try {
+        const tableInfo = await db.all("PRAGMA table_info(tracked_users)");
+        const columnNames = tableInfo.map(col => col.name);
+        
+        if (!columnNames.includes('userAvatar')) {
             await db.exec(`ALTER TABLE tracked_users ADD COLUMN userAvatar TEXT`);
-            await db.exec(`ALTER TABLE tracked_users ADD COLUMN userColor TEXT`);
-            await db.exec(`ALTER TABLE tracked_users ADD COLUMN titleLanguage TEXT DEFAULT 'ROMAJI'`);
-            await db.exec(`ALTER TABLE tracked_users ADD COLUMN profileLastUpdated INTEGER`);
-            console.log("✓ Database schema migrated to include profile fields.");
-        } catch (error) {
-            // Columns already exist, which is fine
-            if (!error.message.includes("duplicate column")) {
-                console.log("Database schema already up to date.");
-            }
+            console.log("✓ Added userAvatar column");
         }
+        if (!columnNames.includes('userColor')) {
+            await db.exec(`ALTER TABLE tracked_users ADD COLUMN userColor TEXT`);
+            console.log("✓ Added userColor column");
+        }
+        if (!columnNames.includes('titleLanguage')) {
+            await db.exec(`ALTER TABLE tracked_users ADD COLUMN titleLanguage TEXT DEFAULT 'ROMAJI'`);
+            console.log("✓ Added titleLanguage column");
+        }
+        if (!columnNames.includes('profileLastUpdated')) {
+            await db.exec(`ALTER TABLE tracked_users ADD COLUMN profileLastUpdated INTEGER`);
+            console.log("✓ Added profileLastUpdated column");
+        }
+        
+        // Checkpoint after migration
+        await db.exec("PRAGMA wal_checkpoint(FULL);");
         
         // Load data from database with detailed logging
         const rows = await db.all("SELECT * FROM tracked_users");
@@ -552,6 +590,26 @@ async function startBot() {
         process.exit(1);
     }
 }
+
+// Graceful shutdown handling to ensure database persists
+async function gracefulShutdown(signal) {
+    console.log(`\n${signal} received. Closing database and shutting down gracefully...`);
+    try {
+        // Final checkpoint to flush all changes to main database file
+        await db.exec("PRAGMA wal_checkpoint(FULL);");
+        await db.close();
+        console.log("✓ Database closed successfully.");
+        process.exit(0);
+    } catch (error) {
+        console.error("Error during shutdown:", error);
+        process.exit(1);
+    }
+}
+
+// Handle various termination signals
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGHUP', () => gracefulShutdown('SIGHUP'));
 
 // bot shuru karte hain
 startBot();
