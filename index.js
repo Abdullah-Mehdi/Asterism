@@ -83,11 +83,11 @@ async function checkAniListActivity(channelId, anilistUserId) {
                         ... on ListActivity { 
                             id status progress createdAt 
                             media { 
+                                id
                                 title { romaji, english, native }, 
                                 coverImage { large }, 
                                 siteUrl 
                             } 
-                            score notes repeat 
                         } 
                     } 
                 }
@@ -98,11 +98,11 @@ async function checkAniListActivity(channelId, anilistUserId) {
                         ... on ListActivity { 
                             id status progress createdAt 
                             media { 
+                                id
                                 title { romaji, english, native }, 
                                 coverImage { large }, 
                                 siteUrl 
                             } 
-                            score notes repeat 
                         } 
                     } 
                 }
@@ -187,27 +187,8 @@ async function checkAniListActivity(channelId, anilistUserId) {
                     for (const activity of activitiesToShow) {
                         const mediaTitle = getPreferredTitle(activity.media.title, currentTitleLanguage);
                         
-                        // Build description with optional fields
-                        let description = `${activity.status} ${activity.progress || ""} - **[${mediaTitle}](${activity.media.siteUrl})**`;
-                        
-                        // Add rating if exists
-                        if (activity.score) {
-                            description += `\n⭐ Rating: ${activity.score}/100`;
-                        }
-                        
-                        // Add repeat count if exists and greater than 0
-                        if (activity.repeat && activity.repeat > 0) {
-                            description += `\n🔁 Rewatch/Reread: ${activity.repeat}`;
-                        }
-                        
-                        // Add notes if exists
-                        if (activity.notes && activity.notes.trim()) {
-                            // Truncate long notes to prevent embed overflow
-                            const truncatedNotes = activity.notes.length > 100 
-                                ? activity.notes.substring(0, 97) + "..." 
-                                : activity.notes;
-                            description += `\n📝 *"${truncatedNotes}"*`;
-                        }
+                        // Build description
+                        const description = `${activity.status} ${activity.progress || ""} - **[${mediaTitle}](${activity.media.siteUrl})**`;
                         
                         const embed = new EmbedBuilder()
                             .setColor(embedColor)
