@@ -285,8 +285,8 @@ async function checkAniListActivity(channelId, anilistUserId) {
                             .setThumbnail(activity.media.coverImage.large)
                             .setTimestamp(activity.createdAt * 1000)
                             .setFooter({ 
-                                text: "From AniList", 
-                                iconURL: "https://anilist.co/img/icons/android-chrome-512x512.png" 
+                                text: "Asterism • From AniList", 
+                                iconURL: client.user.displayAvatarURL() 
                             });
                         
                         // Send via webhook (user's name and avatar will appear as the author)
