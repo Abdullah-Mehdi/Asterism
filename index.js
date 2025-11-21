@@ -377,7 +377,7 @@ client.on("interactionCreate", async (interaction) => {
     try {
         // ephemeral replies ke liye flags use karte hain
         await interaction.deferReply({
-            flags: ["list", "help", "untrack", "stats", "serverstats"].includes(commandName)
+            flags: ["list", "help", "untrack", "serverstats"].includes(commandName)
                 ? [MessageFlags.Ephemeral]
                 : undefined,
         });
@@ -732,6 +732,8 @@ client.on("interactionCreate", async (interaction) => {
             
             // Fetch statistics for all tracked users
             const userIds = Array.from(uniqueUsers.keys());
+            console.log(`Fetching server stats for ${userIds.length} users:`, userIds);
+            
             const batchQuery = `query ($ids: [Int]) {
                 Page(page: 1, perPage: 50) {
                     users(id_in: $ids) {
@@ -768,13 +770,20 @@ client.on("interactionCreate", async (interaction) => {
                 
                 const data = await response.json();
                 
-                if (!data.data || !data.data.Page.users) {
+                if (!data.data || !data.data.Page || !data.data.Page.users) {
+                    console.error("Server stats API error:", JSON.stringify(data.errors || data));
                     return interaction.editReply(
-                        "There was an error fetching server statistics."
+                        "There was an error fetching server statistics. The API returned invalid data."
                     );
                 }
                 
                 const users = data.data.Page.users;
+                
+                if (users.length === 0) {
+                    return interaction.editReply(
+                        "No data available for tracked users in this server."
+                    );
+                }
                 
                 // Calculate aggregate statistics
                 let totalAnime = 0;
@@ -835,9 +844,9 @@ client.on("interactionCreate", async (interaction) => {
                 
                 await interaction.editReply({ embeds: [serverStatsEmbed] });
             } catch (error) {
-                console.error("Error fetching server stats:", error);
+                console.error("Error fetching server stats:", error.message, error.stack);
                 await interaction.editReply(
-                    "There was an error fetching server statistics."
+                    `There was an error fetching server statistics: ${error.message}`
                 );
             }
         }
