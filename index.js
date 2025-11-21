@@ -288,7 +288,7 @@ client.on("interactionCreate", async (interaction) => {
     try {
         // ephemeral replies ke liye flags use karte hain
         await interaction.deferReply({
-            flags: ["list", "help", "untrack"].includes(commandName)
+            flags: ["list", "help", "untrack", "stats", "serverstats"].includes(commandName)
                 ? [MessageFlags.Ephemeral]
                 : undefined,
         });
@@ -317,6 +317,14 @@ client.on("interactionCreate", async (interaction) => {
                     {
                         name: "/list",
                         value: "Shows all AniList users currently being tracked in this channel.",
+                    },
+                    {
+                        name: "/stats <username>",
+                        value: "Shows detailed statistics for an AniList user.",
+                    },
+                    {
+                        name: "/serverstats",
+                        value: "Shows statistics for all tracked users in this server.",
                     },
                     { name: "/help", value: "Displays this list of commands." },
                 );
@@ -475,6 +483,272 @@ client.on("interactionCreate", async (interaction) => {
                 );
                 await interaction.editReply(
                     `Error: Failed to remove **${userToUntrackInfo.anilistUsername}** from database.`,
+                );
+            }
+        } else if (commandName === "stats") {
+            const anilistUsername = interaction.options.getString("username");
+            
+            // Fetch comprehensive user statistics
+            const statsQuery = `query ($username: String) {
+                User(name: $username) {
+                    id
+                    name
+                    avatar { large }
+                    bannerImage
+                    statistics {
+                        anime {
+                            count
+                            episodesWatched
+                            minutesWatched
+                            meanScore
+                            standardDeviation
+                        }
+                        manga {
+                            count
+                            chaptersRead
+                            volumesRead
+                            meanScore
+                            standardDeviation
+                        }
+                    }
+                    favourites {
+                        anime { nodes { title { romaji } } }
+                        manga { nodes { title { romaji } } }
+                        characters { nodes { name { full } } }
+                    }
+                }
+            }`;
+            
+            try {
+                const response = await fetch("https://graphql.anilist.co", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                        Accept: "application/json",
+                    },
+                    body: JSON.stringify({
+                        query: statsQuery,
+                        variables: { username: anilistUsername },
+                    }),
+                });
+                
+                const data = await response.json();
+                
+                if (!data.data || !data.data.User) {
+                    return interaction.editReply(
+                        `Could not find an AniList user with the username **${anilistUsername}**.`
+                    );
+                }
+                
+                const user = data.data.User;
+                const animeStats = user.statistics.anime;
+                const mangaStats = user.statistics.manga;
+                
+                // Calculate days watched
+                const daysWatched = (animeStats.minutesWatched / 1440).toFixed(1);
+                
+                // Get favorite anime (top 3)
+                const favAnime = user.favourites.anime.nodes
+                    .slice(0, 3)
+                    .map(a => a.title.romaji)
+                    .join(", ") || "None";
+                
+                // Get favorite manga (top 3)
+                const favManga = user.favourites.manga.nodes
+                    .slice(0, 3)
+                    .map(m => m.title.romaji)
+                    .join(", ") || "None";
+                
+                // Get favorite character
+                const favChar = user.favourites.characters.nodes[0]?.name.full || "None";
+                
+                const statsEmbed = new EmbedBuilder()
+                    .setColor("#C3B1E1")
+                    .setAuthor({
+                        name: `${user.name}'s AniList Statistics`,
+                        iconURL: user.avatar.large,
+                        url: `https://anilist.co/user/${user.name}/`,
+                    })
+                    .addFields(
+                        {
+                            name: "📺 Anime Statistics",
+                            value: [
+                                `**Total Anime:** ${animeStats.count}`,
+                                `**Episodes Watched:** ${animeStats.episodesWatched.toLocaleString()}`,
+                                `**Days Watched:** ${daysWatched}`,
+                                `**Mean Score:** ${animeStats.meanScore.toFixed(1)}`,
+                            ].join("\n"),
+                            inline: true,
+                        },
+                        {
+                            name: "📖 Manga Statistics",
+                            value: [
+                                `**Total Manga:** ${mangaStats.count}`,
+                                `**Chapters Read:** ${mangaStats.chaptersRead.toLocaleString()}`,
+                                `**Volumes Read:** ${mangaStats.volumesRead.toLocaleString()}`,
+                                `**Mean Score:** ${mangaStats.meanScore.toFixed(1)}`,
+                            ].join("\n"),
+                            inline: true,
+                        },
+                        {
+                            name: "⭐ Favorites",
+                            value: [
+                                `**Anime:** ${favAnime}`,
+                                `**Manga:** ${favManga}`,
+                                `**Character:** ${favChar}`,
+                            ].join("\n"),
+                        }
+                    );
+                
+                if (user.bannerImage) {
+                    statsEmbed.setImage(user.bannerImage);
+                }
+                
+                await interaction.editReply({ embeds: [statsEmbed] });
+            } catch (error) {
+                console.error(`Error fetching stats for ${anilistUsername}:`, error);
+                await interaction.editReply(
+                    `There was an error fetching statistics for **${anilistUsername}**.`
+                );
+            }
+        } else if (commandName === "serverstats") {
+            // Collect all unique users tracked in this server (across all channels)
+            const guildId = interaction.guildId;
+            const allChannelsInGuild = Object.keys(trackedUsers);
+            const uniqueUsers = new Map();
+            
+            // Gather all unique tracked users in this guild
+            for (const channelId of allChannelsInGuild) {
+                try {
+                    const channel = await client.channels.fetch(channelId);
+                    if (channel && channel.guildId === guildId) {
+                        for (const userId in trackedUsers[channelId]) {
+                            const user = trackedUsers[channelId][userId];
+                            if (!uniqueUsers.has(userId)) {
+                                uniqueUsers.set(userId, user.anilistUsername);
+                            }
+                        }
+                    }
+                } catch (error) {
+                    // Channel might not be accessible, skip it
+                    continue;
+                }
+            }
+            
+            if (uniqueUsers.size === 0) {
+                return interaction.editReply(
+                    "No users are currently being tracked in this server."
+                );
+            }
+            
+            // Fetch statistics for all tracked users
+            const userIds = Array.from(uniqueUsers.keys());
+            const batchQuery = `query ($ids: [Int]) {
+                Page(page: 1, perPage: 50) {
+                    users(id_in: $ids) {
+                        id
+                        name
+                        statistics {
+                            anime {
+                                count
+                                episodesWatched
+                                minutesWatched
+                                meanScore
+                            }
+                            manga {
+                                count
+                                chaptersRead
+                            }
+                        }
+                    }
+                }
+            }`;
+            
+            try {
+                const response = await fetch("https://graphql.anilist.co", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                        Accept: "application/json",
+                    },
+                    body: JSON.stringify({
+                        query: batchQuery,
+                        variables: { ids: userIds.map(id => parseInt(id)) },
+                    }),
+                });
+                
+                const data = await response.json();
+                
+                if (!data.data || !data.data.Page.users) {
+                    return interaction.editReply(
+                        "There was an error fetching server statistics."
+                    );
+                }
+                
+                const users = data.data.Page.users;
+                
+                // Calculate aggregate statistics
+                let totalAnime = 0;
+                let totalEpisodes = 0;
+                let totalManga = 0;
+                let totalChapters = 0;
+                let totalMinutes = 0;
+                let avgScore = 0;
+                
+                users.forEach(user => {
+                    totalAnime += user.statistics.anime.count;
+                    totalEpisodes += user.statistics.anime.episodesWatched;
+                    totalManga += user.statistics.manga.count;
+                    totalChapters += user.statistics.manga.chaptersRead;
+                    totalMinutes += user.statistics.anime.minutesWatched;
+                    avgScore += user.statistics.anime.meanScore;
+                });
+                
+                avgScore = (avgScore / users.length).toFixed(1);
+                const totalDays = (totalMinutes / 1440).toFixed(1);
+                
+                // Find top watchers
+                const topWatchers = users
+                    .sort((a, b) => b.statistics.anime.count - a.statistics.anime.count)
+                    .slice(0, 5)
+                    .map((u, i) => `${i + 1}. **${u.name}** - ${u.statistics.anime.count} anime`)
+                    .join("\n");
+                
+                const serverStatsEmbed = new EmbedBuilder()
+                    .setColor("#C3B1E1")
+                    .setTitle(`📊 Server AniList Statistics`)
+                    .setDescription(`Tracking **${uniqueUsers.size}** users in this server`)
+                    .addFields(
+                        {
+                            name: "📺 Combined Anime Stats",
+                            value: [
+                                `**Total Anime Watched:** ${totalAnime.toLocaleString()}`,
+                                `**Total Episodes:** ${totalEpisodes.toLocaleString()}`,
+                                `**Total Days Watched:** ${totalDays}`,
+                                `**Average Score:** ${avgScore}`,
+                            ].join("\n"),
+                            inline: true,
+                        },
+                        {
+                            name: "📖 Combined Manga Stats",
+                            value: [
+                                `**Total Manga Read:** ${totalManga.toLocaleString()}`,
+                                `**Total Chapters:** ${totalChapters.toLocaleString()}`,
+                            ].join("\n"),
+                            inline: true,
+                        },
+                        {
+                            name: "🏆 Top Watchers",
+                            value: topWatchers,
+                        }
+                    )
+                    .setTimestamp();
+                
+                await interaction.editReply({ embeds: [serverStatsEmbed] });
+            } catch (error) {
+                console.error("Error fetching server stats:", error);
+                await interaction.editReply(
+                    "There was an error fetching server statistics."
                 );
             }
         }

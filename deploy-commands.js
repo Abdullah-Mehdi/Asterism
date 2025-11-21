@@ -38,6 +38,20 @@ const commands = [
     new SlashCommandBuilder()
         .setName("help")
         .setDescription("Displays a list of all available commands."),
+
+    new SlashCommandBuilder()
+        .setName("stats")
+        .setDescription("Shows detailed statistics for an AniList user.")
+        .addStringOption((option) =>
+            option
+                .setName("username")
+                .setDescription("The AniList username to get stats for.")
+                .setRequired(true),
+        ),
+
+    new SlashCommandBuilder()
+        .setName("serverstats")
+        .setDescription("Shows statistics for all tracked users in this server."),
 ].map((command) => command.toJSON());
 
 const rest = new REST({ version: "10" }).setToken(token);
