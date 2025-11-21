@@ -734,9 +734,9 @@ client.on("interactionCreate", async (interaction) => {
             const userIds = Array.from(uniqueUsers.keys());
             console.log(`Fetching server stats for ${userIds.length} users:`, userIds);
             
-            const batchQuery = `query ($ids: [Int]) {
+            const batchQuery = `query ($id_in: [Int]) {
                 Page(page: 1, perPage: 50) {
-                    users(id_in: $ids) {
+                    users(id_in: $id_in) {
                         id
                         name
                         statistics {
@@ -764,7 +764,7 @@ client.on("interactionCreate", async (interaction) => {
                     },
                     body: JSON.stringify({
                         query: batchQuery,
-                        variables: { ids: userIds.map(id => parseInt(id)) },
+                        variables: { id_in: userIds.map(id => parseInt(id)) },
                     }),
                 });
                 
