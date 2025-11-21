@@ -102,29 +102,42 @@ async function getOrCreateWebhook(channel) {
 
 // Send activity via webhook or fallback to regular message
 async function sendActivityUpdate(channel, anilistUsername, userAvatar, embed) {
+    let webhookSent = false;
+    
     try {
         const webhook = await getOrCreateWebhook(channel);
         
         if (webhook) {
             // Send via webhook with user's identity
-            await webhook.send({
-                username: anilistUsername,
-                avatarURL: userAvatar || undefined,
-                embeds: [embed],
-            });
-            return true;
-        } else {
-            // Fallback to regular bot message
+            try {
+                await webhook.send({
+                    username: anilistUsername,
+                    avatarURL: userAvatar || undefined,
+                    embeds: [embed],
+                });
+                webhookSent = true;
+                return true;
+            } catch (webhookError) {
+                console.error(`Webhook send failed, falling back to regular message:`, webhookError.message);
+                // Remove broken webhook from cache
+                delete webhookCache[channel.id];
+            }
+        }
+        
+        // Only send regular message if webhook didn't succeed
+        if (!webhookSent) {
             await channel.send({ embeds: [embed] });
             return false;
         }
     } catch (error) {
-        console.error(`Error sending activity update:`, error.message);
-        // Ultimate fallback
-        try {
-            await channel.send({ embeds: [embed] });
-        } catch (fallbackError) {
-            console.error(`Failed to send even fallback message:`, fallbackError.message);
+        console.error(`Error in sendActivityUpdate:`, error.message);
+        // Only try fallback if we haven't sent via webhook
+        if (!webhookSent) {
+            try {
+                await channel.send({ embeds: [embed] });
+            } catch (fallbackError) {
+                console.error(`Failed to send even fallback message:`, fallbackError.message);
+            }
         }
         return false;
     }
@@ -268,6 +281,11 @@ async function checkAniListActivity(channelId, anilistUserId) {
                         
                         const embed = new EmbedBuilder()
                             .setColor(embedColor)
+                            .setAuthor({
+                                name: `${anilistUsername}'s Activity`,
+                                iconURL: currentAvatar,
+                                url: `https://anilist.co/user/${anilistUsername}/`,
+                            })
                             .setDescription(description)
                             .setThumbnail(activity.media.coverImage.large)
                             .setTimestamp(activity.createdAt * 1000)
