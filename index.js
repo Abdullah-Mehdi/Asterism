@@ -11,6 +11,7 @@ const {
     GatewayIntentBits,
     EmbedBuilder,
     MessageFlags,
+    PermissionsBitField,
 } = require("discord.js");
 const fetch = require("node-fetch");
 
@@ -22,6 +23,7 @@ process.on("unhandledRejection", (error) => {
 
 let trackedUsers = {}; // memory mein users ka data rakhe ga
 let db; // database ka instance
+let webhookCache = {}; // cache webhooks per channel
 const PROFILE_CACHE_DURATION = 86400000; // 24 hours in milliseconds
 
 // AniList profile colors ko hex codes mein convert karne ke liye mapping
@@ -51,6 +53,80 @@ function getPreferredTitle(mediaTitles, preference) {
         case "ROMAJI_STYLISED":
         default:
             return mediaTitles.romaji || mediaTitles.english || mediaTitles.native;
+    }
+}
+
+// Webhook management functions
+async function getOrCreateWebhook(channel) {
+    // Check cache first
+    if (webhookCache[channel.id]) {
+        try {
+            // Verify webhook still exists
+            await webhookCache[channel.id].fetch();
+            return webhookCache[channel.id];
+        } catch (error) {
+            // Webhook was deleted, remove from cache
+            delete webhookCache[channel.id];
+        }
+    }
+    
+    try {
+        // Check bot permissions
+        const permissions = channel.permissionsFor(client.user);
+        if (!permissions.has(PermissionsBitField.Flags.ManageWebhooks)) {
+            console.warn(`⚠️ Missing MANAGE_WEBHOOKS permission in channel ${channel.id}`);
+            return null;
+        }
+        
+        // Fetch existing webhooks
+        const webhooks = await channel.fetchWebhooks();
+        let webhook = webhooks.find(wh => wh.owner?.id === client.user.id && wh.name === 'AniList Activity');
+        
+        // Create if doesn't exist
+        if (!webhook) {
+            webhook = await channel.createWebhook({
+                name: 'AniList Activity',
+                reason: 'For posting AniList activity updates',
+            });
+            console.log(`✓ Created webhook for channel ${channel.id}`);
+        }
+        
+        // Cache it
+        webhookCache[channel.id] = webhook;
+        return webhook;
+    } catch (error) {
+        console.error(`Error managing webhook for channel ${channel.id}:`, error.message);
+        return null;
+    }
+}
+
+// Send activity via webhook or fallback to regular message
+async function sendActivityUpdate(channel, anilistUsername, userAvatar, embed) {
+    try {
+        const webhook = await getOrCreateWebhook(channel);
+        
+        if (webhook) {
+            // Send via webhook with user's identity
+            await webhook.send({
+                username: anilistUsername,
+                avatarURL: userAvatar || undefined,
+                embeds: [embed],
+            });
+            return true;
+        } else {
+            // Fallback to regular bot message
+            await channel.send({ embeds: [embed] });
+            return false;
+        }
+    } catch (error) {
+        console.error(`Error sending activity update:`, error.message);
+        // Ultimate fallback
+        try {
+            await channel.send({ embeds: [embed] });
+        } catch (fallbackError) {
+            console.error(`Failed to send even fallback message:`, fallbackError.message);
+        }
+        return false;
     }
 }
 
@@ -192,16 +268,16 @@ async function checkAniListActivity(channelId, anilistUserId) {
                         
                         const embed = new EmbedBuilder()
                             .setColor(embedColor)
-                            .setAuthor({
-                                name: `${anilistUsername}'s Activity`,
-                                iconURL: currentAvatar,
-                                url: `https://anilist.co/user/${anilistUsername}/`,
-                            })
                             .setDescription(description)
                             .setThumbnail(activity.media.coverImage.large)
                             .setTimestamp(activity.createdAt * 1000)
-                            .setFooter({ text: "From AniList" });
-                        await channel.send({ embeds: [embed] });
+                            .setFooter({ 
+                                text: "From AniList", 
+                                iconURL: "https://anilist.co/img/icons/android-chrome-512x512.png" 
+                            });
+                        
+                        // Send via webhook (user's name and avatar will appear as the author)
+                        await sendActivityUpdate(channel, anilistUsername, currentAvatar, embed);
                     }
                 }
 
