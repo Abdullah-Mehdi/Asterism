@@ -730,13 +730,14 @@ client.on("interactionCreate", async (interaction) => {
                 );
             }
             
-            // Fetch statistics for all tracked users
+            // Fetch statistics for all tracked users individually
             const userIds = Array.from(uniqueUsers.keys());
             console.log(`Fetching server stats for ${userIds.length} users:`, userIds);
             
-            const batchQuery = `query ($id_in: [Int]) {
-                Page(page: 1, perPage: 50) {
-                    users(id_in: $id_in) {
+            // We need to fetch each user individually since batch query doesn't work
+            const userDataPromises = userIds.map(async (userId) => {
+                const userQuery = `query ($id: Int) {
+                    User(id: $id) {
                         id
                         name
                         statistics {
@@ -752,32 +753,32 @@ client.on("interactionCreate", async (interaction) => {
                             }
                         }
                     }
+                }`;
+                
+                try {
+                    const response = await fetch("https://graphql.anilist.co", {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "application/json",
+                            Accept: "application/json",
+                        },
+                        body: JSON.stringify({
+                            query: userQuery,
+                            variables: { id: parseInt(userId) },
+                        }),
+                    });
+                    
+                    const data = await response.json();
+                    return data.data?.User || null;
+                } catch (error) {
+                    console.error(`Error fetching user ${userId}:`, error);
+                    return null;
                 }
-            }`;
+            });
             
             try {
-                const response = await fetch("https://graphql.anilist.co", {
-                    method: "POST",
-                    headers: {
-                        "Content-Type": "application/json",
-                        Accept: "application/json",
-                    },
-                    body: JSON.stringify({
-                        query: batchQuery,
-                        variables: { id_in: userIds.map(id => parseInt(id)) },
-                    }),
-                });
-                
-                const data = await response.json();
-                
-                if (!data.data || !data.data.Page || !data.data.Page.users) {
-                    console.error("Server stats API error:", JSON.stringify(data.errors || data));
-                    return interaction.editReply(
-                        "There was an error fetching server statistics. The API returned invalid data."
-                    );
-                }
-                
-                const users = data.data.Page.users;
+                const usersData = await Promise.all(userDataPromises);
+                const users = usersData.filter(u => u !== null);
                 
                 if (users.length === 0) {
                     return interaction.editReply(
