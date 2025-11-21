@@ -1,34 +1,82 @@
 # Asterism - AniList Discord Bot
 
-A Discord bot that tracks AniList user activity and posts updates to Discord channels in real-time. Get notified when users update their anime/manga lists, complete episodes, or change their watching status. Now featuring slash commands, persistent data storage, and robust error handling!
+A Discord bot that tracks AniList user activity and posts updates to Discord channels in real-time. Get notified when users update their anime/manga lists, complete episodes, or change their watching status. Features webhook-based activity posts, user statistics, profile customization, and robust data persistence!
 
-## Features
+## ✨ Features
 
-- 🔍 **Real-time Tracking**: Monitors AniList user activity every 5 minutes
+### Core Functionality
+- 🎭 **Webhook-Based Posts**: Activity updates appear as if posted by the actual user (with their avatar and username)
 - 📊 **Rich Embeds**: Beautiful Discord embeds with anime cover images and metadata
-- 🎯 **Channel-specific**: Track different users in different Discord channels
+- 🔍 **Batch Activity Tracking**: Shows ALL activities between checks (up to 15 at once)
+- ⏱️ **10-Minute Intervals**: Efficient monitoring with reduced API load
+- 🎨 **Profile Customization**: Respects user's AniList profile colors and title language preferences
+- 💾 **Persistent Storage**: SQLite with WAL mode ensures data survives crashes and restarts
+
+### User Experience
 - ⚡ **Slash Commands**: Modern Discord slash command interface
-- 🔗 **Direct Links**: Clickable links to AniList profiles and media pages
-- 💾 **Persistent Storage**: SQLite database ensures data survives bot restarts
+- 🌐 **Title Language Support**: Shows titles in user's preferred language (Romaji/English/Native)
+- 📈 **Statistics Commands**: View detailed stats for individual users or entire server
+- 🎯 **Channel-Specific**: Track different users in different Discord channels
+- 🔒 **Smart Privacy**: Ephemeral replies for management commands
 - 🛡️ **Error Resilience**: Advanced error handling prevents crashes
-- 👥 **Multi-user Support**: Track multiple users per channel with easy management
-- 🔒 **Smart Privacy**: Ephemeral replies for private informationniList Discord Bot
 
-## Commands
+### Technical Excellence
+- 🔄 **Profile Caching**: 24-hour cache reduces API calls by 98%
+- 💪 **Graceful Shutdown**: Proper database closure on restart
+- 🔐 **Permission Handling**: Automatic fallback when webhook permissions unavailable
+- 📝 **Database Verification**: All writes are verified and checkpointed
+- 🚀 **Immediate Startup Check**: No 10-minute wait after bot restarts
 
-| Command | Description | Usage | Visibility |
-|---------|-------------|-------|------------|
-| `/track <username>` | Start tracking an AniList user in the current channel | `/track YourUsername` | Public |
-| `/untrack <username>` | Stop tracking a specific user in the current channel | `/untrack YourUsername` | Private |
-| `/list` | Show all AniList users currently being tracked in this channel | `/list` | Private |
-| `/help` | Display available commands with detailed descriptions | `/help` | Private |
+## 📋 Commands
+
+| Command | Description | Visibility |
+|---------|-------------|------------|
+| `/track <username>` | Start tracking an AniList user in the current channel | Public |
+| `/untrack <username>` | Stop tracking a specific user in the current channel | Private |
+| `/list` | Show all AniList users currently being tracked in this channel | Private |
+| `/stats <username>` | Display detailed statistics for any AniList user | Public |
+| `/serverstats` | Show combined statistics for all tracked users in the server | Public |
+| `/help` | Display available commands with detailed descriptions | Private |
 
 **🔒 Privacy Notes:**
-- **Public commands** are visible to everyone in the channel
-- **Private commands** use ephemeral replies (only you can see the response)
-- This keeps channel clean and protects sensitive information
+- **Public commands**: Visible to everyone in the channel
+- **Private commands**: Ephemeral replies (only you can see)
+- Activity updates use webhooks when available for authentic appearance
 
-## Setup
+## 🎨 What Makes It Special
+
+### Webhook-Based Activity Posts
+Activity updates appear with the **user's actual AniList avatar and username**, making it look like they posted it themselves:
+
+```
+👤 BlankIts [with their AniList avatar]
+├─ BlankIts's Activity [clickable profile link]
+├─ read chapter 26 - Smoking Behind the Supermarket with You
+├─ [Manga cover image]
+└─ 🤖 Asterism • From AniList • 5:14 AM
+```
+
+### Profile Customization
+- **Colors**: Uses each user's AniList profile color for embeds
+- **Avatars**: Shows user's AniList profile picture
+- **Title Language**: Respects user's preference (Romaji/English/Native)
+- **Automatic Updates**: Profile data cached for 24 hours, then refreshed
+
+### Statistics Commands
+
+**`/stats <username>`** shows:
+- Anime statistics (count, episodes watched, days watched, mean score)
+- Manga statistics (count, chapters read, volumes read, mean score)
+- Top 3 favorite anime, manga, and favorite character
+- User's banner image (if they have one)
+
+**`/serverstats`** shows:
+- Combined stats for all tracked users in the server
+- Total anime/manga watched across everyone
+- Total episodes and chapters
+- Top 5 anime watchers with avatars and profile links
+
+## 🚀 Setup
 
 ### Prerequisites
 
@@ -55,260 +103,231 @@ A Discord bot that tracks AniList user activity and posts updates to Discord cha
    - Create a new application
    - Go to the "Bot" section
    - Create a bot and copy the token
+   - Get your Application ID (Client ID) from the "General Information" tab
 
 4. **Set up configuration**
    Create a `config.json` file in the root directory:
    ```json
    {
+     "clientId": "your_application_id_here",
      "token": "your_discord_bot_token_here"
    }
    ```
-   
-   **Alternative**: You can still use a `.env` file if you prefer:
-   ```env
-   DISCORD_TOKEN=your_discord_bot_token_here
-   ```
-   (You'll need to modify the code to use `process.env.DISCORD_TOKEN` instead)
 
 5. **Register slash commands**
-   Before first use, you need to register the slash commands with Discord:
    ```bash
-   # You'll need to create a separate script or use Discord Developer Portal
-   # to register /track, /untrack, /list, and /help commands
+   node deploy-commands.js
    ```
+   This registers `/track`, `/untrack`, `/list`, `/stats`, `/serverstats`, and `/help` commands globally.
 
 6. **Invite the bot to your server**
    - In the Discord Developer Portal, go to OAuth2 > URL Generator
-   - Select "bot" and "applications.commands" scopes
-   - Select the following permissions:
-     - Send Messages
-     - Embed Links
-     - Use Slash Commands
+   - Select scopes: `bot` and `applications.commands`
+   - Select permissions:
+     - ✅ Send Messages
+     - ✅ Embed Links
+     - ✅ Manage Webhooks (for webhook-based posts)
+     - ✅ Use Slash Commands
    - Use the generated URL to invite the bot
 
 7. **Run the bot**
    ```bash
-   npm start
-   # or
    node index.js
    ```
 
-## Hosting on Replit
+## 🔧 Bot Permissions
 
-The bot can be hosted on Replit, though the current version doesn't include the web server:
-
-1. **Import to Replit**
-   - Create a new Repl on [Replit](https://replit.com)
-   - Import from GitHub or upload your files
-   - Replit will automatically detect it's a Node.js project
-
-2. **Set Configuration**
-   - Create a `config.json` file with your bot token
-   - Or use Replit's "Secrets" tab to store the token securely
-
-3. **Register Slash Commands**
-   - You'll need to register the slash commands through Discord Developer Portal
-   - Or create a deployment script (not included in current version)
-
-4. **Run**
-   - Click the "Run" button in Replit
-   - The bot will start and the database will be automatically created
-
-## Bot Permissions
-
-The bot requires the following Discord permissions:
+### Required Permissions
 - **Send Messages**: To post activity updates
 - **Embed Links**: To send rich embed messages
-- **Use Slash Commands**: To respond to slash command interactions
+- **Use Slash Commands**: To respond to slash commands
 
-**Important**: The bot uses **Guild-only intents** for better performance and security.
+### Optional (Recommended)
+- **Manage Webhooks**: For webhook-based activity posts (with user avatars)
+  - If not granted, bot automatically falls back to regular messages
+  - Activity updates still work, just appear from the bot instead
 
-## How It Works
+## 📊 How It Works
 
-1. **Database Initialization**: On startup, the bot:
-   - Creates a SQLite database (`bot.db`) if it doesn't exist
-   - Loads all previously tracked users into memory for fast access
-   - Sets up the tracking table structure
+### Database & Performance
+1. **Startup**: Loads all tracked users from SQLite database into memory
+2. **WAL Mode**: Uses Write-Ahead Logging for crash resistance
+3. **Periodic Checkpoints**: Database synced every 30 minutes
+4. **Graceful Shutdown**: Proper database closure on SIGTERM/SIGINT signals
+5. **Profile Caching**: User profiles cached for 24 hours (reduces API calls by 98%)
 
-2. **Slash Command Registration**: Commands are registered with Discord and appear in the slash command menu
+### Activity Monitoring
+1. **Immediate Check**: Runs check immediately on startup
+2. **10-Minute Interval**: Checks all tracked users every 10 minutes
+3. **Batch Detection**: Finds ALL new activities since last check (up to 15 shown)
+4. **Chronological Order**: Posts activities oldest-to-newest
+5. **Smart Updates**: Only posts new activities, never duplicates
 
-3. **User Registration**: When you use `/track <username>`, the bot:
-   - Queries AniList's GraphQL API to find the user and get their ID
-   - Stores the user's data in both the SQLite database and in-memory cache
-   - Associates them with the specific Discord channel
-   - Prevents duplicate tracking of the same user in the same channel
-   - Responds publicly so everyone knows tracking started
+### Webhook System
+1. **Creation**: Creates one webhook per channel (cached)
+2. **Verification**: Validates webhook exists before each use
+3. **Fallback**: Automatically uses regular messages if webhooks fail
+4. **Recovery**: Recreates broken webhooks automatically
+5. **Permissions**: Gracefully handles missing webhook permissions
 
-4. **Activity Monitoring**: Every 5 minutes, the bot:
-   - Loops through all tracked users across all channels
-   - Fetches the latest activity for each user from AniList
-   - Compares it with the last known activity ID stored in the database
-   - Posts new activities as rich Discord embeds
-
-5. **Data Management**: The bot provides commands to:
-   - List all tracked users in a channel (`/list`) - private response
-   - Remove specific users from tracking (`/untrack <username>`) - private response
-   - View help and command information (`/help`) - private response
-
-6. **Error Handling**: Advanced error handling ensures:
-   - Promise rejections don't crash the bot
-   - Failed interactions are handled gracefully
-   - Database errors are logged but don't stop operation
-   - Network issues with AniList API are handled properly
-
-7. **Activity Updates**: When new activity is detected, the bot:
-   - Posts a rich embed with the user's profile link
-   - Shows activity description (e.g., "Watched episode 5 of Attack on Titan")
-   - Includes anime/manga cover image as thumbnail
-   - Provides direct links to the media page on AniList
-   - Updates the database with the new activity ID for future comparisons
-
-## Example Output
-
-### Slash Command Autocomplete
-Discord will show available slash commands when you type `/`:
-```
-/track - Start tracking an AniList user
-/untrack - Stop tracking a specific user  
-/list - Show tracked users (only you see this)
-/help - Show command help (only you see this)
-```
-
-### List Command (Private Response)
-When you use `/list`, only you see:
-```
-🎯 AniList Users Tracked in this Channel
-• YourUsername
-• FriendUsername  
-• AnotherUser
-```
-
-### Activity Updates (Public)
-When a user updates their list, everyone sees:
-```
-👤 YourUsername's Activity
-📺 Watched episode 12 of Attack on Titan: Final Season
-🖼️ [Anime cover image thumbnail]
-🔗 Clickable links to user profile and anime page
-⏰ Timestamp: 2 minutes ago
-From AniList
-```
-
-### Help Command (Private Response)
-The `/help` command shows a detailed embed with:
-- All available commands with proper slash command formatting
-- Usage examples
-- Helpful descriptions
-
-## Project Structure
-
-```
-Asterism/
-├── index.js          # Main bot file with slash commands and database logic
-├── package.json      # Dependencies and project metadata  
-├── config.json       # Bot token configuration (create this)
-├── README.md         # This file
-├── bot.db           # SQLite database (auto-generated)
-└── .env             # Alternative config method (optional)
-```
-
-## Dependencies
-
-- **discord.js** (^14.21.0): Discord API wrapper for Node.js
-- **dotenv** (^17.2.0): Load environment variables from .env file
-- **node-fetch** (^2.7.0): HTTP client for making API requests to AniList
-- **sqlite3** (^5.1.7): SQLite database driver for persistent data storage
-
-## Database Schema
-
-The bot uses SQLite with the following table structure:
+## 🗄️ Database Schema
 
 ```sql
 CREATE TABLE tracked_users (
-    channelId TEXT NOT NULL,        -- Discord channel ID
-    anilistUserId INTEGER NOT NULL, -- AniList user ID
-    anilistUsername TEXT NOT NULL,  -- AniList username
-    lastActivityId INTEGER,         -- Last tracked activity ID
+    channelId TEXT NOT NULL,           -- Discord channel ID
+    anilistUserId INTEGER NOT NULL,    -- AniList user ID
+    anilistUsername TEXT NOT NULL,     -- AniList username
+    lastActivityId INTEGER,            -- Last tracked activity ID
+    userAvatar TEXT,                   -- Cached AniList avatar URL
+    userColor TEXT,                    -- Cached profile color
+    titleLanguage TEXT,                -- Title language preference
+    profileLastUpdated INTEGER,        -- Cache timestamp
     PRIMARY KEY (channelId, anilistUserId)
 );
 ```
 
-This design allows:
-- Multiple users per channel
-- Same user tracked in different channels
-- Efficient lookups and updates
-- Data persistence across bot restarts
+## 📦 Project Structure
 
-## API Usage
+```
+Asterism/
+├── index.js              # Main bot with slash commands, webhooks, and database
+├── deploy-commands.js    # Slash command registration script
+├── package.json          # Dependencies and project metadata
+├── config.json           # Bot configuration (you create this)
+├── bot.db               # SQLite database (auto-generated)
+├── README.md            # This file
+├── TERMS.md             # Terms of Service
+├── PRIVACY.md           # Privacy Policy
+└── .gitignore           # Git ignore rules
+```
 
-The bot uses the [AniList GraphQL API](https://anilist.gitbook.io/anilist-apiv2-docs/) to:
-- Find users by username and get their unique AniList ID
-- Fetch the latest list activities using user ID for better reliability
-- Get media information (titles, cover images, URLs)
-- No authentication required - uses public API endpoints
+## 🔌 API Integration
 
-## Limitations
+### AniList GraphQL API
+- **User Profiles**: Avatars, colors, title language preferences
+- **Activity Feed**: Latest anime/manga list updates
+- **Statistics**: Anime/manga counts, episodes, scores
+- **Media Information**: Titles, cover images, URLs
+- **Rate Limit Friendly**: 98% reduction in API calls via caching
 
-- **5-minute Intervals**: Activity checks happen every 5 minutes (configurable in code)
-- **Single Activity**: Only tracks the most recent list activity per user  
-- **List Activities Only**: Currently tracks anime/manga list updates, not forum posts or reviews
-- **Manual Slash Command Registration**: Commands need to be registered manually before first use
-- **No Auto-hosting**: Removed built-in web server (add back if needed for hosting platforms)
+### Discord API
+- **Slash Commands**: Modern command interface
+- **Webhooks**: User-impersonation for activity posts
+- **Embeds**: Rich message formatting
+- **Ephemeral Messages**: Private command responses
 
-## Recent Updates (v3.0)
+## 📈 Performance
 
-### ✅ **Major Changes**
-- **Slash Commands**: Migrated from prefix commands (`!anilist`) to modern slash commands (`/track`)
-- **Smart Privacy**: Commands like `/list`, `/help`, `/untrack` use ephemeral replies (private)
-- **Advanced Error Handling**: Unhandled promise rejection protection prevents crashes
-- **Improved Configuration**: Uses `config.json` instead of `.env` file
-- **Modern Discord.js**: Updated to use latest Discord.js features and best practices
+### API Call Optimization
+- **Before caching**: ~2 calls per user per check (720 calls/day for 6 users)
+- **After caching**: ~0.04 calls per user per check (14 calls/day for 6 users)
+- **Reduction**: 98% fewer API calls
 
-### 🔧 **Technical Improvements**
-- Guild-only intents for better performance
-- Proper slash command deferral and response handling
-- Robust error recovery with fallback messages
-- Memory-efficient database operations with async/await
-- Better separation of public vs private command responses
+### Activity Handling
+- **Check Interval**: 10 minutes (reduced from 5 minutes)
+- **Batch Limit**: Up to 15 activities shown per check
+- **Concurrent**: All tracked users checked in parallel
 
-### 🚨 **Breaking Changes from v2.0**
-- **Commands changed**: `!anilist track` → `/track`
-- **Configuration**: Now requires `config.json` file
-- **Permissions**: Bot needs "Use Slash Commands" permission
-- **Setup**: Slash commands must be registered before use
+## 🛠️ Configuration Options
 
-## Future Enhancements
+### Check Interval
+Change line 363 in `index.js`:
+```javascript
+}, 600000); // 10 minutes (600000ms)
+```
 
-- 🤖 **Auto Command Registration**: Automatic slash command deployment script
-- ⚙️ **Configurable Intervals**: Per-channel activity check intervals
-- 📱 **Additional Activity Types**: Forum posts, reviews, favorites tracking
-- 🎨 **Customizable Themes**: User-selectable embed colors and styles
-- 📊 **Analytics Dashboard**: Activity statistics and progress tracking
-- 🔔 **Smart Notifications**: Mention users for milestone achievements
-- 🗂️ **User Groups**: Bulk management and organization features
-- 🌍 **Internationalization**: Multi-language support
-- 🌐 **Web Dashboard**: Browser-based management interface
-- 📈 **Activity Graphs**: Visual progress tracking and statistics
+### Activity Display Limit
+Change line 245 in `index.js`:
+```javascript
+const activitiesToShow = newActivities.slice(0, 15); // Show 15 max
+```
 
-## Contributing
+### Profile Cache Duration
+Change line 26 in `index.js`:
+```javascript
+const PROFILE_CACHE_DURATION = 86400000; // 24 hours
+```
+
+## 🐛 Troubleshooting
+
+### Double Posts
+- **Cause**: Multiple bot instances running
+- **Fix**: Run `pkill -9 node` on Replit, then restart
+
+### Missing Webhook Posts
+- **Cause**: Bot lacks "Manage Webhooks" permission
+- **Behavior**: Automatically falls back to regular messages
+- **Fix**: Re-invite bot with updated permissions
+
+### Database Not Persisting
+- **Cause**: WAL file not checkpointed
+- **Fix**: Bot now auto-checkpoints every 30 minutes + on shutdown
+
+### Commands Not Appearing
+- **Cause**: Commands not registered with Discord
+- **Fix**: Run `node deploy-commands.js`
+- **Wait**: Global commands take 5-15 minutes to propagate
+
+## 📜 Legal
+
+- **Terms of Service**: [TERMS.md](./TERMS.md)
+- **Privacy Policy**: [PRIVACY.md](./PRIVACY.md)
+
+## 🚀 Recent Updates (v4.0)
+
+### ✨ New Features
+- **Webhook-based activity posts** with user avatars and usernames
+- **Profile customization** (colors, avatars, title languages)
+- **`/stats` command** for individual user statistics
+- **`/serverstats` command** for server-wide analytics
+- **Batch activity tracking** (shows all activities between checks)
+- **Profile caching** (24-hour cache, 98% API reduction)
+
+### 🔧 Technical Improvements
+- **10-minute check interval** (reduced load)
+- **WAL mode** for database crash resistance
+- **Periodic checkpointing** for data persistence
+- **Graceful shutdown** handling
+- **Immediate startup check** (no waiting period)
+- **Activity cap** at 15 to prevent spam
+- **Webhook fallback** system with auto-recovery
+
+### 🛡️ Stability Enhancements
+- **Double-post prevention** with edge case handling
+- **Database write verification** on all operations
+- **Better error messages** with detailed logging
+- **Permission graceful degradation**
+- **Network error resilience**
+
+## 🔮 Potential Future Features
+
+- Activity filtering (anime-only, manga-only, by status)
+- Weekly digest mode
+- User comparison features
+- Seasonal tracking
+- Custom activity templates
+- Role-based access control
+- Multi-server dashboard
+- Rate limit dashboard
+
+## 🤝 Contributing
 
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add some amazing feature'`)
+3. Commit your changes (`git commit -m 'Add amazing feature'`)
 4. Push to the branch (`git push origin feature/amazing-feature`)
 5. Open a Pull Request
 
-## License
+## 📞 Support
 
-This project is licensed under the ISC License - see the [LICENSE](LICENSE) file for details.
+- **Issues**: [GitHub Issues](https://github.com/Abdullah-Mehdi/Asterism/issues)
+- **AniList API**: [Documentation](https://anilist.gitbook.io/anilist-apiv2-docs/)
+- **Discord.js**: [Documentation](https://discord.js.org/)
 
-## Support
+## ⚖️ License
 
-If you encounter any issues or have questions:
-- Open an issue on [GitHub](https://github.com/Abdullah-Mehdi/Asterism/issues)
-- Check the [AniList API documentation](https://anilist.gitbook.io/anilist-apiv2-docs/)
-- Review the [Discord.js documentation](https://discord.js.org/)
+This project is licensed under the ISC License - see the LICENSE file for details.
 
-## Disclaimer
+## 📝 Disclaimer
 
-This bot is not affiliated with AniList. It uses the public AniList API in accordance with their terms of service.
+This bot is not affiliated with AniList or Discord. It uses the public AniList API and Discord API in accordance with their respective terms of service.
