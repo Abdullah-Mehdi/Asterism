@@ -339,6 +339,9 @@ async function checkAniListActivity(channelId, anilistUserId) {
 client.on("ready", () => {
     console.log(`Logged in as ${client.user.tag}!`);
     
+    // Set custom status
+    client.user.setActivity('/help');
+    
     // Immediately check once on startup
     const userCount = Object.keys(trackedUsers).reduce((total, channelId) => {
         return total + Object.keys(trackedUsers[channelId]).length;
