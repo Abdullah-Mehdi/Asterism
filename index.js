@@ -102,42 +102,37 @@ async function getOrCreateWebhook(channel) {
 
 // Send activity via webhook or fallback to regular message
 async function sendActivityUpdate(channel, anilistUsername, userAvatar, embed) {
-    let webhookSent = false;
-    
     try {
         const webhook = await getOrCreateWebhook(channel);
         
         if (webhook) {
-            // Send via webhook with user's identity
+            // Try to send via webhook with user's identity
             try {
                 await webhook.send({
                     username: anilistUsername,
                     avatarURL: userAvatar || undefined,
                     embeds: [embed],
                 });
-                webhookSent = true;
-                return true;
+                return true; // Successfully sent via webhook
             } catch (webhookError) {
                 console.error(`Webhook send failed, falling back to regular message:`, webhookError.message);
                 // Remove broken webhook from cache
                 delete webhookCache[channel.id];
+                // Fall through to send regular message
             }
         }
         
-        // Only send regular message if webhook didn't succeed
-        if (!webhookSent) {
-            await channel.send({ embeds: [embed] });
-            return false;
-        }
+        // Send regular message (either no webhook or webhook failed)
+        await channel.send({ embeds: [embed] });
+        return false; // Sent via regular message
+        
     } catch (error) {
         console.error(`Error in sendActivityUpdate:`, error.message);
-        // Only try fallback if we haven't sent via webhook
-        if (!webhookSent) {
-            try {
-                await channel.send({ embeds: [embed] });
-            } catch (fallbackError) {
-                console.error(`Failed to send even fallback message:`, fallbackError.message);
-            }
+        // Last resort fallback
+        try {
+            await channel.send({ embeds: [embed] });
+        } catch (fallbackError) {
+            console.error(`Failed to send message:`, fallbackError.message);
         }
         return false;
     }
