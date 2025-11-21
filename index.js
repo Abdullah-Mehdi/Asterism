@@ -377,7 +377,7 @@ client.on("interactionCreate", async (interaction) => {
     try {
         // ephemeral replies ke liye flags use karte hain
         await interaction.deferReply({
-            flags: ["list", "help", "untrack", "serverstats"].includes(commandName)
+            flags: ["list", "help", "untrack"].includes(commandName)
                 ? [MessageFlags.Ephemeral]
                 : undefined,
         });
@@ -740,6 +740,9 @@ client.on("interactionCreate", async (interaction) => {
                     User(id: $id) {
                         id
                         name
+                        avatar {
+                            medium
+                        }
                         statistics {
                             anime {
                                 count
@@ -810,8 +813,14 @@ client.on("interactionCreate", async (interaction) => {
                 const topWatchers = users
                     .sort((a, b) => b.statistics.anime.count - a.statistics.anime.count)
                     .slice(0, 5)
-                    .map((u, i) => `${i + 1}. **${u.name}** - ${u.statistics.anime.count} anime`)
+                    .map((u, i) => {
+                        const avatarEmoji = u.avatar?.medium ? `[🎭](${u.avatar.medium})` : '👤';
+                        return `${i + 1}. ${avatarEmoji} **[${u.name}](https://anilist.co/user/${u.name})** - ${u.statistics.anime.count} anime`;
+                    })
                     .join("\n");
+                
+                // Get top user's avatar for thumbnail
+                const topUser = users.sort((a, b) => b.statistics.anime.count - a.statistics.anime.count)[0];
                 
                 const serverStatsEmbed = new EmbedBuilder()
                     .setColor("#C3B1E1")
@@ -841,6 +850,7 @@ client.on("interactionCreate", async (interaction) => {
                             value: topWatchers,
                         }
                     )
+                    .setThumbnail(topUser?.avatar?.medium || null)
                     .setTimestamp();
                 
                 await interaction.editReply({ embeds: [serverStatsEmbed] });
