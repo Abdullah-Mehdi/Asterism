@@ -102,6 +102,8 @@ async function getOrCreateWebhook(channel) {
 
 // Send activity via webhook or fallback to regular message
 async function sendActivityUpdate(channel, anilistUsername, userAvatar, embed) {
+    let messageSent = false;
+    
     try {
         const webhook = await getOrCreateWebhook(channel);
         
@@ -123,16 +125,19 @@ async function sendActivityUpdate(channel, anilistUsername, userAvatar, embed) {
         }
         
         // Send regular message (either no webhook or webhook failed)
+        messageSent = true; // Mark that we're attempting a send
         await channel.send({ embeds: [embed] });
         return false; // Sent via regular message
         
     } catch (error) {
         console.error(`Error in sendActivityUpdate:`, error.message);
-        // Last resort fallback
-        try {
-            await channel.send({ embeds: [embed] });
-        } catch (fallbackError) {
-            console.error(`Failed to send message:`, fallbackError.message);
+        // Only retry if we haven't already attempted to send a regular message
+        if (!messageSent) {
+            try {
+                await channel.send({ embeds: [embed] });
+            } catch (fallbackError) {
+                console.error(`Failed to send message:`, fallbackError.message);
+            }
         }
         return false;
     }
