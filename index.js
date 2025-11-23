@@ -14,6 +14,63 @@ const {
     PermissionsBitField,
 } = require("discord.js");
 const fetch = require("node-fetch");
+const fs = require("fs");
+const path = require("path");
+
+// Lock file to prevent multiple instances
+const LOCK_FILE = path.join(__dirname, 'bot.lock');
+
+// Check if another instance is running
+function checkSingleInstance() {
+    try {
+        if (fs.existsSync(LOCK_FILE)) {
+            const lockPid = fs.readFileSync(LOCK_FILE, 'utf8');
+            try {
+                // Check if that process is still running
+                process.kill(lockPid, 0);
+                console.error(`❌ Another instance is already running (PID: ${lockPid}). Exiting...`);
+                process.exit(1);
+            } catch (e) {
+                // Process doesn't exist, remove stale lock file
+                console.log('🔧 Removing stale lock file...');
+                fs.unlinkSync(LOCK_FILE);
+            }
+        }
+        
+        // Create lock file with current PID
+        fs.writeFileSync(LOCK_FILE, process.pid.toString());
+        console.log(`✓ Lock acquired (PID: ${process.pid})`);
+        
+        // Clean up lock file on exit
+        process.on('exit', () => {
+            try {
+                fs.unlinkSync(LOCK_FILE);
+            } catch (e) {
+                // Ignore errors on cleanup
+            }
+        });
+        
+        // Handle termination signals
+        ['SIGINT', 'SIGTERM', 'SIGQUIT'].forEach(signal => {
+            process.on(signal, () => {
+                console.log(`\n${signal} received, cleaning up...`);
+                try {
+                    fs.unlinkSync(LOCK_FILE);
+                } catch (e) {
+                    // Ignore errors
+                }
+                process.exit(0);
+            });
+        });
+        
+    } catch (error) {
+        console.error('Error setting up single instance lock:', error);
+        process.exit(1);
+    }
+}
+
+// Call this immediately to prevent multiple instances
+checkSingleInstance();
 
 // agar koi promise reject ho jaye to bot crash na ho
 process.on("unhandledRejection", (error) => {
@@ -968,9 +1025,20 @@ async function gracefulShutdown(signal) {
     console.log(`\n${signal} received. Closing database and shutting down gracefully...`);
     try {
         // Final checkpoint to flush all changes to main database file
-        await db.exec("PRAGMA wal_checkpoint(FULL);");
-        await db.close();
-        console.log("✓ Database closed successfully.");
+        if (db) {
+            await db.exec("PRAGMA wal_checkpoint(FULL);");
+            await db.close();
+            console.log("✓ Database closed successfully.");
+        }
+        
+        // Remove lock file
+        try {
+            fs.unlinkSync(LOCK_FILE);
+            console.log("✓ Lock file removed.");
+        } catch (e) {
+            // Ignore if lock file doesn't exist
+        }
+        
         process.exit(0);
     } catch (error) {
         console.error("Error during shutdown:", error);
@@ -978,9 +1046,7 @@ async function gracefulShutdown(signal) {
     }
 }
 
-// Handle various termination signals
-process.on('SIGINT', () => gracefulShutdown('SIGINT'));
-process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+// Handle SIGHUP separately (other signals handled in checkSingleInstance)
 process.on('SIGHUP', () => gracefulShutdown('SIGHUP'));
 
 // bot shuru karte hain
