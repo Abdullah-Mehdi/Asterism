@@ -205,8 +205,9 @@ async function checkAniListActivity(channelId, anilistUserId) {
     const trackingInfo = trackedUsers[channelId]?.[anilistUserId];
     if (!trackingInfo) return;
 
-    const { anilistUsername, lastActivityId, userAvatar, userColor, titleLanguage, profileLastUpdated } = trackingInfo;
+    const { anilistUsername, lastActivityId, userAvatar, userColor, titleLanguage, profileLastUpdated, activityFilter } = trackingInfo;
     const url = "https://graphql.anilist.co";
+    const filter = activityFilter || "both";
     const now = Date.now();
     
     // Check if we need to refresh profile data (older than 24 hours or missing)
@@ -230,6 +231,7 @@ async function checkAniListActivity(channelId, anilistUserId) {
                             id status progress createdAt 
                             media { 
                                 id
+                                type
                                 title { romaji, english, native }, 
                                 coverImage { large }, 
                                 siteUrl 
@@ -245,6 +247,7 @@ async function checkAniListActivity(channelId, anilistUserId) {
                             id status progress createdAt 
                             media { 
                                 id
+                                type
                                 title { romaji, english, native }, 
                                 coverImage { large }, 
                                 siteUrl 
@@ -306,9 +309,17 @@ async function checkAniListActivity(channelId, anilistUserId) {
             const activities = activityData.Page.activities;
 
             // Find all new activities (those with ID greater than lastActivityId)
-            const newActivities = lastActivityId
+            let newActivities = lastActivityId
                 ? activities.filter((activity) => activity.id > lastActivityId)
                 : [activities[0]]; // If no lastActivityId, only show the most recent one
+
+            // Apply activity filter based on user preference
+            if (filter === 'anime') {
+                newActivities = newActivities.filter(activity => activity.media.type === 'ANIME');
+            } else if (filter === 'manga') {
+                newActivities = newActivities.filter(activity => activity.media.type === 'MANGA');
+            }
+            // If 'both', show everything (no filter)
 
             if (newActivities.length > 0) {
                 // Cap at 15 activities to prevent spam, but still update to latest
@@ -461,8 +472,8 @@ client.on("interactionCreate", async (interaction) => {
                 .setTitle("AniList Bot Commands")
                 .addFields(
                     {
-                        name: "/track <username>",
-                        value: "Starts tracking a user's activity in this channel.",
+                        name: "/track <username> [filter]",
+                        value: "Starts tracking a user's activity. Optional filter: anime, manga, or both (default).",
                     },
                     {
                         name: "/untrack <username>",
@@ -491,7 +502,13 @@ client.on("interactionCreate", async (interaction) => {
             if (usersInChannel && Object.keys(usersInChannel).length > 0) {
                 listEmbed.setDescription(
                     Object.values(usersInChannel)
-                        .map((user) => `• **${user.anilistUsername}**`)
+                        .map((user) => {
+                            const filterEmoji = user.activityFilter === 'anime' ? '📺' :
+                                              user.activityFilter === 'manga' ? '📖' : '📺📖';
+                            const filterText = user.activityFilter === 'both' ? '' : 
+                                             ` (${user.activityFilter} only)`;
+                            return `• ${filterEmoji} **${user.anilistUsername}**${filterText}`;
+                        })
                         .join("\n"),
                 );
             } else {
@@ -502,6 +519,7 @@ client.on("interactionCreate", async (interaction) => {
             await interaction.editReply({ embeds: [listEmbed] });
         } else if (commandName === "track") {
             const anilistUsername = interaction.options.getString("username");
+            const activityFilter = interaction.options.getString("filter") || "both";
             const channelId = interaction.channelId;
             
             // Fetch user ID and profile data in one query
@@ -540,7 +558,7 @@ client.on("interactionCreate", async (interaction) => {
                     `**${anilistUsername}** is already being tracked in this channel.`,
                 );
             
-            const sql = `INSERT INTO tracked_users (channelId, anilistUsername, anilistUserId, lastActivityId, userAvatar, userColor, titleLanguage, profileLastUpdated) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`;
+            const sql = `INSERT INTO tracked_users (channelId, anilistUsername, anilistUserId, lastActivityId, userAvatar, userColor, titleLanguage, profileLastUpdated, activityFilter) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`;
             await db.run(sql, [
                 channelId,
                 anilistUsername,
@@ -550,6 +568,7 @@ client.on("interactionCreate", async (interaction) => {
                 userColor,
                 titleLanguage,
                 now,
+                activityFilter,
             ]);
             
             // Force checkpoint to ensure data is persisted to main database file
@@ -573,6 +592,7 @@ client.on("interactionCreate", async (interaction) => {
                     userColor: userColor,
                     titleLanguage: titleLanguage,
                     profileLastUpdated: now,
+                    activityFilter: activityFilter,
                 };
             } else {
                 console.error(
@@ -580,8 +600,10 @@ client.on("interactionCreate", async (interaction) => {
                 );
                 throw new Error("Failed to persist user to database");
             }
+            const filterText = activityFilter === 'both' ? 'all activity' : 
+                              activityFilter === 'anime' ? 'anime only' : 'manga only';
             await interaction.editReply(
-                `Successfully found **${anilistUsername}**. Now tracking them in this channel!`,
+                `Successfully found **${anilistUsername}**. Now tracking their ${filterText} in this channel!`,
             );
             checkAniListActivity(channelId, anilistUserId);
         } else if (commandName === "untrack") {
@@ -964,6 +986,7 @@ async function startBot() {
                 userColor TEXT,
                 titleLanguage TEXT DEFAULT 'ROMAJI',
                 profileLastUpdated INTEGER,
+                activityFilter TEXT DEFAULT 'both',
                 PRIMARY KEY (channelId, anilistUserId)
             )`,
         );
@@ -989,6 +1012,10 @@ async function startBot() {
             await db.exec(`ALTER TABLE tracked_users ADD COLUMN profileLastUpdated INTEGER`);
             console.log("✓ Added profileLastUpdated column");
         }
+        if (!columnNames.includes('activityFilter')) {
+            await db.exec(`ALTER TABLE tracked_users ADD COLUMN activityFilter TEXT DEFAULT 'both'`);
+            console.log("✓ Added activityFilter column");
+        }
         
         // Checkpoint after migration
         await db.exec("PRAGMA wal_checkpoint(FULL);");
@@ -1007,6 +1034,7 @@ async function startBot() {
                 userColor: row.userColor,
                 titleLanguage: row.titleLanguage || "ROMAJI",
                 profileLastUpdated: row.profileLastUpdated,
+                activityFilter: row.activityFilter || "both",
             };
             console.log(`  [${index + 1}] User: ${row.anilistUsername} (ID: ${row.anilistUserId}), LastActivityId: ${row.lastActivityId}, Channel: ${row.channelId}`);
         });

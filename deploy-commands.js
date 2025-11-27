@@ -15,6 +15,17 @@ const commands = [
                 .setName("username")
                 .setDescription("The AniList username to track.")
                 .setRequired(true),
+        )
+        .addStringOption((option) =>
+            option
+                .setName("filter")
+                .setDescription("What type of activity to track (default: both)")
+                .setRequired(false)
+                .addChoices(
+                    { name: 'Both Anime and Manga', value: 'both' },
+                    { name: 'Anime Only', value: 'anime' },
+                    { name: 'Manga Only', value: 'manga' }
+                ),
         ),
 
     new SlashCommandBuilder()
