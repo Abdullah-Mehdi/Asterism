@@ -1,5 +1,5 @@
 modules = ["nodejs-20"]
-run = "npm run start"
+run = "echo '⚠️  Use the DEPLOY button instead of Run for production! ⚠️' && echo 'The Run button is disabled to prevent duplicate bot instances.' && echo 'Go to the Deployments tab and use the deployed version.'"
 
 [nix]
 channel = "stable-24_05"

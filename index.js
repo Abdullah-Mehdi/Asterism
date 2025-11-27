@@ -17,8 +17,10 @@ const fetch = require("node-fetch");
 const fs = require("fs");
 const path = require("path");
 
-// Lock file to prevent multiple instances
-const LOCK_FILE = path.join(__dirname, 'bot.lock');
+// Lock file to prevent multiple instances - use persistent storage
+const LOCK_FILE = process.env.REPL_HOME ? 
+    path.join(process.env.REPL_HOME, 'bot.lock') : 
+    path.join(__dirname, 'bot.lock');
 
 // Check if another instance is running
 function checkSingleInstance() {
@@ -970,7 +972,12 @@ client.on("interactionCreate", async (interaction) => {
 // bot ko start karne ka main function
 async function startBot() {
     try {
-        db = await open({ filename: "./bot.db", driver: sqlite3.Database });
+        // Use persistent storage path for Replit deployments
+        const dbPath = process.env.REPL_HOME ? 
+            path.join(process.env.REPL_HOME, 'bot.db') : './bot.db';
+        
+        console.log(`Database path: ${dbPath}`);
+        db = await open({ filename: dbPath, driver: sqlite3.Database });
         console.log("Connected to the SQLite database.");
         
         // Enable WAL mode for better concurrent access and prevent corruption
