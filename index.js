@@ -578,6 +578,12 @@ client.on(Events.ClientReady, () => {
             console.error("Database checkpoint error:", error);
         }
     }, 1800000); // 30 minutes
+
+    // One immediate backup so a fresh deploy snapshots within seconds, then
+    // weekly thereafter. Single rotating file (overwritten in place) — coarse
+    // safety net against accidental deletion, not granular point-in-time.
+    backupDatabase();
+    setInterval(backupDatabase, 7 * 24 * 60 * 60 * 1000); // 7 days
 });
 
 // =========================================================================
@@ -1092,15 +1098,38 @@ client.on("interactionCreate", async (interaction) => {
 // =========================================================================
 
 /**
+ * Resolve the on-disk SQLite path. Replit deployments persist
+ * `$REPL_HOME/bot.db` across redeploys; locally we use `./bot.db`.
+ */
+function resolveDbPath() {
+    return process.env.REPL_HOME
+        ? path.join(process.env.REPL_HOME, 'bot.db')
+        : './bot.db';
+}
+
+/**
+ * Snapshot bot.db to bot.db.backup. Best-effort — failures log but never
+ * propagate. Coarse weekly insurance against accidental deletion or
+ * corruption; not a substitute for proper external backups.
+ */
+function backupDatabase() {
+    const dbPath = resolveDbPath();
+    try {
+        fs.copyFileSync(dbPath, dbPath + '.backup');
+        console.log("✓ Database backup written.");
+    } catch (e) {
+        console.error("Database backup failed:", e.message);
+    }
+}
+
+/**
  * Open the SQLite database (WAL mode), apply idempotent migrations,
  * hydrate the in-memory `trackedUsers` cache, and log into Discord.
  * Uses $REPL_HOME/bot.db when running on Replit, ./bot.db locally.
  */
 async function startBot() {
     try {
-        // Persistent storage on Replit so the DB survives redeploys.
-        const dbPath = process.env.REPL_HOME ?
-            path.join(process.env.REPL_HOME, 'bot.db') : './bot.db';
+        const dbPath = resolveDbPath();
 
         console.log(`Database path: ${dbPath}`);
         db = await open({ filename: dbPath, driver: sqlite3.Database });
