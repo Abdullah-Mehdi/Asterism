@@ -1,4 +1,4 @@
-// sqlite async/await ke liye
+﻿// sqlite async/await ke liye
 const { open } = require("sqlite");
 const sqlite3 = require("sqlite3").verbose();
 
@@ -23,6 +23,10 @@ const {
 // Node 20+ provides a global `fetch` — no node-fetch dep needed.
 const fs = require("fs");
 const path = require("path");
+
+const { aniListFetch } = require("./lib/anilist");
+const commands = require("./commands");
+const commandMap = new Map(commands.map(c => [c.data.name, c]));
 
 // =========================================================================
 // Single-instance lock
@@ -110,20 +114,6 @@ const firstPollComplete = new Set();
 const PROFILE_CACHE_DURATION = 86400000; // 24 hours in ms
 const PERMISSIONS_CACHE_TTL = 3600000; // 1 hour — channel perms drift slowly
 
-// AniList rate-limit gate. Updated when the API returns 429; while
-// `Date.now() < rateLimitedUntil`, every aniListFetch short-circuits.
-let rateLimitedUntil = 0;
-
-// Marker error so callers can distinguish "AniList told us to wait" from
-// generic network failures and respond with a friendly retry hint.
-class RateLimitError extends Error {
-    constructor(retryAfterMs) {
-        super(`AniList rate-limited for another ~${Math.ceil(retryAfterMs / 1000)}s`);
-        this.name = "RateLimitError";
-        this.retryAfterMs = retryAfterMs;
-    }
-}
-
 // AniList profile colors ko hex codes mein convert karne ke liye mapping
 const anilistColorMap = {
     blue: "#3DB4F2",
@@ -158,52 +148,6 @@ function getPreferredTitle(mediaTitles, preference) {
         default:
             return mediaTitles.romaji || mediaTitles.english || mediaTitles.native;
     }
-}
-
-// =========================================================================
-// AniList client
-// =========================================================================
-
-/**
- * POST a GraphQL query to AniList with rate-limit awareness.
- * Throws RateLimitError when we know we'd be denied (gate is active, or
- * the response itself returns 429). On success returns the parsed JSON.
- *
- * AniList's per-IP limit is 90 requests/minute and is communicated via
- * `X-RateLimit-Remaining` / `X-RateLimit-Reset` headers.
- */
-async function aniListFetch(query, variables) {
-    const now = Date.now();
-    if (now < rateLimitedUntil) {
-        throw new RateLimitError(rateLimitedUntil - now);
-    }
-
-    const response = await fetch("https://graphql.anilist.co", {
-        method: "POST",
-        headers: {
-            "Content-Type": "application/json",
-            Accept: "application/json",
-        },
-        body: JSON.stringify({ query, variables }),
-    });
-
-    const remainingHeader = response.headers.get("x-ratelimit-remaining");
-    const remaining = remainingHeader != null ? parseInt(remainingHeader, 10) : NaN;
-    if (Number.isFinite(remaining) && remaining < 10) {
-        console.warn(`⚠️ AniList rate limit low: ${remaining} requests remaining.`);
-    }
-
-    if (response.status === 429) {
-        const resetSec = parseInt(response.headers.get("x-ratelimit-reset") ?? "0", 10);
-        rateLimitedUntil = Number.isFinite(resetSec) && resetSec > 0
-            ? resetSec * 1000
-            : Date.now() + 60_000; // 60s fallback if header missing
-        const waitMs = rateLimitedUntil - Date.now();
-        console.warn(`⚠️ AniList returned 429. Backing off for ~${Math.ceil(waitMs / 1000)}s.`);
-        throw new RateLimitError(waitMs);
-    }
-
-    return response.json();
 }
 
 // =========================================================================
@@ -592,14 +536,12 @@ client.on(Events.ClientReady, () => {
 
 client.on("interactionCreate", async (interaction) => {
     if (!interaction.isChatInputCommand()) return;
-    const { commandName } = interaction;
+    const cmd = commandMap.get(interaction.commandName);
+    if (!cmd) return;
 
     try {
-        // /list, /help, /untrack are management — keep them ephemeral.
         await interaction.deferReply({
-            flags: ["list", "help", "untrack"].includes(commandName)
-                ? [MessageFlags.Ephemeral]
-                : undefined,
+            flags: cmd.ephemeral ? [MessageFlags.Ephemeral] : undefined,
         });
     } catch (error) {
         console.error(
@@ -609,458 +551,19 @@ client.on("interactionCreate", async (interaction) => {
         return;
     }
 
+    // Bag of runtime references for command handlers.
+    const ctx = {
+        client,
+        db,
+        trackedUsers,
+        webhookCache,
+        permissionsCache,
+        checkAniListActivity,
+        commands,
+    };
+
     try {
-        if (commandName === "help") {
-            const helpEmbed = new EmbedBuilder()
-                .setColor("#C3B1E1")
-                .setTitle("AniList Bot Commands")
-                .addFields(
-                    {
-                        name: "/track <username> [filter]",
-                        value: "Starts tracking a user's activity. Optional filter: anime, manga, or both (default).",
-                    },
-                    {
-                        name: "/untrack <username>",
-                        value: "Stops tracking a specific user in this channel.",
-                    },
-                    {
-                        name: "/list",
-                        value: "Shows all AniList users currently being tracked in this channel.",
-                    },
-                    {
-                        name: "/stats <username>",
-                        value: "Shows detailed statistics for an AniList user.",
-                    },
-                    {
-                        name: "/serverstats",
-                        value: "Shows statistics for all tracked users in this server.",
-                    },
-                    { name: "/help", value: "Displays this list of commands." },
-                );
-            await interaction.editReply({ embeds: [helpEmbed] });
-        } else if (commandName === "list") {
-            const usersInChannel = trackedUsers[interaction.channelId];
-            const listEmbed = new EmbedBuilder()
-                .setColor("#C3B1E1")
-                .setTitle(`AniList Users Tracked in this Channel`);
-            if (usersInChannel && Object.keys(usersInChannel).length > 0) {
-                listEmbed.setDescription(
-                    Object.values(usersInChannel)
-                        .map((user) => {
-                            const filterEmoji = user.activityFilter === 'anime' ? '📺' :
-                                              user.activityFilter === 'manga' ? '📖' : '📺📖';
-                            const filterText = user.activityFilter === 'both' ? '' :
-                                             ` (${user.activityFilter} only)`;
-                            return `• ${filterEmoji} **${user.anilistUsername}**${filterText}`;
-                        })
-                        .join("\n"),
-                );
-            } else {
-                listEmbed.setDescription(
-                    "No users are currently being tracked in this channel.",
-                );
-            }
-            await interaction.editReply({ embeds: [listEmbed] });
-        } else if (commandName === "track") {
-            const anilistUsername = interaction.options.getString("username");
-            const activityFilter = interaction.options.getString("filter") || "both";
-            const channelId = interaction.channelId;
-
-            // Lookup ID + profile (avatar/color/titleLanguage) in a single query.
-            const findUserQuery = `query ($username: String) { 
-                User(name: $username) { 
-                    id 
-                    avatar { large }
-                    options { profileColor, titleLanguage }
-                } 
-            }`;
-            const data = await aniListFetch(findUserQuery, { username: anilistUsername });
-            if (!data.data || !data.data.User)
-                return interaction.editReply(
-                    `Could not find an AniList user with the username **${anilistUsername}**. Please check spelling.`,
-                );
-
-            const anilistUserId = data.data.User.id;
-            const userAvatar = data.data.User.avatar?.large;
-            const userColor = data.data.User.options?.profileColor;
-            const titleLanguage = data.data.User.options?.titleLanguage || "ROMAJI";
-            const now = Date.now();
-
-            if (trackedUsers[channelId]?.[anilistUserId])
-                return interaction.editReply(
-                    `**${anilistUsername}** is already being tracked in this channel.`,
-                );
-
-            const sql = `INSERT INTO tracked_users (channelId, anilistUsername, anilistUserId, lastActivityId, userAvatar, userColor, titleLanguage, profileLastUpdated, activityFilter) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`;
-            await db.run(sql, [
-                channelId,
-                anilistUsername,
-                anilistUserId,
-                null,
-                userAvatar,
-                userColor,
-                titleLanguage,
-                now,
-                activityFilter,
-            ]);
-
-            // FULL checkpoint — user-facing write, must survive a kill.
-            await db.exec("PRAGMA wal_checkpoint(FULL);");
-
-            const verification = await db.get(
-                `SELECT * FROM tracked_users WHERE channelId = ? AND anilistUserId = ?`,
-                [channelId, anilistUserId]
-            );
-
-            if (verification) {
-                console.log(
-                    `✓ [SUCCESS] Database write for ${anilistUsername} completed and verified.`,
-                );
-                if (!trackedUsers[channelId]) trackedUsers[channelId] = {};
-                trackedUsers[channelId][anilistUserId] = {
-                    anilistUsername: anilistUsername,
-                    lastActivityId: null,
-                    userAvatar: userAvatar,
-                    userColor: userColor,
-                    titleLanguage: titleLanguage,
-                    profileLastUpdated: now,
-                    activityFilter: activityFilter,
-                };
-            } else {
-                console.error(
-                    `✗ [ERROR] Database write verification failed for ${anilistUsername}!`,
-                );
-                throw new Error("Failed to persist user to database");
-            }
-            const filterText = activityFilter === 'both' ? 'all activity' :
-                              activityFilter === 'anime' ? 'anime only' : 'manga only';
-            await interaction.editReply(
-                `Successfully found **${anilistUsername}**. Now tracking their ${filterText} in this channel!`,
-            );
-            checkAniListActivity(channelId, anilistUserId);
-        } else if (commandName === "untrack") {
-            const usernameToUntrack = interaction.options.getString("username");
-            const channelId = interaction.channelId;
-            const usersInChannel = trackedUsers[channelId];
-            if (!usersInChannel)
-                return interaction.editReply({
-                    content:
-                        "No users are currently being tracked in this channel.",
-                });
-            let userToUntrackInfo = null,
-                userIdToUntrack = null;
-            for (const userId in usersInChannel) {
-                if (
-                    usersInChannel[userId].anilistUsername.toLowerCase() ===
-                    usernameToUntrack.toLowerCase()
-                ) {
-                    userToUntrackInfo = usersInChannel[userId];
-                    userIdToUntrack = userId;
-                    break;
-                }
-            }
-            if (!userToUntrackInfo)
-                return interaction.editReply({
-                    content: `**${usernameToUntrack}** is not being tracked in this channel.`,
-                });
-            const sql = `DELETE FROM tracked_users WHERE channelId = ? AND anilistUserId = ?`;
-            await db.run(sql, [channelId, userIdToUntrack]);
-
-            // FULL checkpoint — user-facing write, must survive a kill.
-            await db.exec("PRAGMA wal_checkpoint(FULL);");
-
-            const verification = await db.get(
-                `SELECT * FROM tracked_users WHERE channelId = ? AND anilistUserId = ?`,
-                [channelId, userIdToUntrack]
-            );
-
-            if (!verification) {
-                console.log(
-                    `✓ Successfully deleted ${userToUntrackInfo.anilistUsername} from database (verified).`,
-                );
-                delete trackedUsers[channelId][userIdToUntrack];
-                if (Object.keys(trackedUsers[channelId]).length === 0) {
-                    delete trackedUsers[channelId];
-                    // Channel ab khaali hai — per-channel caches bhi drop kar do
-                    // taake long-running deploys mein stale entries jama na hon.
-                    delete webhookCache[channelId];
-                    delete permissionsCache[channelId];
-                }
-                await interaction.editReply(
-                    `Stopped tracking **${userToUntrackInfo.anilistUsername}** in this channel.`,
-                );
-            } else {
-                console.error(
-                    `✗ Database delete verification failed for ${userToUntrackInfo.anilistUsername}!`,
-                );
-                await interaction.editReply(
-                    `Error: Failed to remove **${userToUntrackInfo.anilistUsername}** from database.`,
-                );
-            }
-        } else if (commandName === "stats") {
-            const anilistUsername = interaction.options.getString("username");
-
-            const statsQuery = `query ($username: String) {
-                User(name: $username) {
-                    id
-                    name
-                    avatar { large }
-                    bannerImage
-                    statistics {
-                        anime {
-                            count
-                            episodesWatched
-                            minutesWatched
-                            meanScore
-                            standardDeviation
-                        }
-                        manga {
-                            count
-                            chaptersRead
-                            volumesRead
-                            meanScore
-                            standardDeviation
-                        }
-                    }
-                    favourites {
-                        anime { nodes { title { romaji } } }
-                        manga { nodes { title { romaji } } }
-                        characters { nodes { name { full } } }
-                    }
-                }
-            }`;
-
-            try {
-                const data = await aniListFetch(statsQuery, { username: anilistUsername });
-
-                if (!data.data || !data.data.User) {
-                    return interaction.editReply(
-                        `Could not find an AniList user with the username **${anilistUsername}**.`
-                    );
-                }
-
-                const user = data.data.User;
-                const animeStats = user.statistics.anime;
-                const mangaStats = user.statistics.manga;
-
-                const daysWatched = (animeStats.minutesWatched / 1440).toFixed(1);
-
-                const favAnime = user.favourites.anime.nodes
-                    .slice(0, 3)
-                    .map(a => a.title.romaji)
-                    .join(", ") || "None";
-
-                const favManga = user.favourites.manga.nodes
-                    .slice(0, 3)
-                    .map(m => m.title.romaji)
-                    .join(", ") || "None";
-
-                const favChar = user.favourites.characters.nodes[0]?.name.full || "None";
-
-                const statsEmbed = new EmbedBuilder()
-                    .setColor("#C3B1E1")
-                    .setAuthor({
-                        name: `${user.name}'s AniList Statistics`,
-                        iconURL: user.avatar.large,
-                        url: `https://anilist.co/user/${user.name}/`,
-                    })
-                    .addFields(
-                        {
-                            name: "📺 Anime Statistics",
-                            value: [
-                                `**Total Anime:** ${animeStats.count}`,
-                                `**Episodes Watched:** ${animeStats.episodesWatched.toLocaleString()}`,
-                                `**Days Watched:** ${daysWatched}`,
-                                `**Mean Score:** ${animeStats.meanScore.toFixed(1)}`,
-                            ].join("\n"),
-                            inline: true,
-                        },
-                        {
-                            name: "📖 Manga Statistics",
-                            value: [
-                                `**Total Manga:** ${mangaStats.count}`,
-                                `**Chapters Read:** ${mangaStats.chaptersRead.toLocaleString()}`,
-                                `**Volumes Read:** ${mangaStats.volumesRead.toLocaleString()}`,
-                                `**Mean Score:** ${mangaStats.meanScore.toFixed(1)}`,
-                            ].join("\n"),
-                            inline: true,
-                        },
-                        {
-                            name: "⭐ Favorites",
-                            value: [
-                                `**Anime:** ${favAnime}`,
-                                `**Manga:** ${favManga}`,
-                                `**Character:** ${favChar}`,
-                            ].join("\n"),
-                        }
-                    );
-
-                if (user.bannerImage) {
-                    statsEmbed.setImage(user.bannerImage);
-                }
-
-                await interaction.editReply({ embeds: [statsEmbed] });
-            } catch (error) {
-                console.error(`Error fetching stats for ${anilistUsername}:`, error);
-                await interaction.editReply(
-                    `There was an error fetching statistics for **${anilistUsername}**.`
-                );
-            }
-        } else if (commandName === "serverstats") {
-            // Collect every unique AniList user tracked anywhere in this guild
-            // (a user may be tracked in multiple channels — dedupe by AniList ID).
-            const guildId = interaction.guildId;
-            const allChannelsInGuild = Object.keys(trackedUsers);
-            const uniqueUsers = new Map();
-
-            for (const channelId of allChannelsInGuild) {
-                try {
-                    const channel = await client.channels.fetch(channelId);
-                    if (channel && channel.guildId === guildId) {
-                        for (const userId in trackedUsers[channelId]) {
-                            const user = trackedUsers[channelId][userId];
-                            if (!uniqueUsers.has(userId)) {
-                                uniqueUsers.set(userId, user.anilistUsername);
-                            }
-                        }
-                    }
-                } catch (error) {
-                    // Channel inaccessible — skip silently and continue.
-                    continue;
-                }
-            }
-
-            if (uniqueUsers.size === 0) {
-                return interaction.editReply(
-                    "No users are currently being tracked in this server."
-                );
-            }
-
-            const userIds = Array.from(uniqueUsers.keys());
-            console.log(`Fetching server stats for ${userIds.length} users:`, userIds);
-
-            // AniList's schema doesn't expose a multi-User field, so we fan out
-            // one query per user and Promise.all the lot.
-            const userDataPromises = userIds.map(async (userId) => {
-                const userQuery = `query ($id: Int) {
-                    User(id: $id) {
-                        id
-                        name
-                        avatar {
-                            medium
-                        }
-                        statistics {
-                            anime {
-                                count
-                                episodesWatched
-                                minutesWatched
-                                meanScore
-                            }
-                            manga {
-                                count
-                                chaptersRead
-                            }
-                        }
-                    }
-                }`;
-
-                try {
-                    const data = await aniListFetch(userQuery, { id: parseInt(userId) });
-                    return data.data?.User || null;
-                } catch (error) {
-                    if (error.name !== "RateLimitError") {
-                        console.error(`Error fetching user ${userId}:`, error);
-                    }
-                    return null;
-                }
-            });
-
-            try {
-                const usersData = await Promise.all(userDataPromises);
-                const users = usersData.filter(u => u !== null);
-
-                if (users.length === 0) {
-                    // Distinguish rate-limit drought from genuine no-data.
-                    if (Date.now() < rateLimitedUntil) {
-                        const sec = Math.ceil((rateLimitedUntil - Date.now()) / 1000);
-                        return interaction.editReply(
-                            `AniList is temporarily rate-limiting us. Try again in ~${sec}s.`
-                        );
-                    }
-                    return interaction.editReply(
-                        "No data available for tracked users in this server."
-                    );
-                }
-
-                let totalAnime = 0;
-                let totalEpisodes = 0;
-                let totalManga = 0;
-                let totalChapters = 0;
-                let totalMinutes = 0;
-                let avgScore = 0;
-
-                users.forEach(user => {
-                    totalAnime += user.statistics.anime.count;
-                    totalEpisodes += user.statistics.anime.episodesWatched;
-                    totalManga += user.statistics.manga.count;
-                    totalChapters += user.statistics.manga.chaptersRead;
-                    totalMinutes += user.statistics.anime.minutesWatched;
-                    avgScore += user.statistics.anime.meanScore;
-                });
-
-                avgScore = (avgScore / users.length).toFixed(1);
-                const totalDays = (totalMinutes / 1440).toFixed(1);
-
-                const topWatchers = users
-                    .sort((a, b) => b.statistics.anime.count - a.statistics.anime.count)
-                    .slice(0, 5)
-                    .map((u, i) => {
-                        const avatarEmoji = u.avatar?.medium ? `[🎭](${u.avatar.medium})` : '👤';
-                        return `${i + 1}. ${avatarEmoji} **[${u.name}](https://anilist.co/user/${u.name})** - ${u.statistics.anime.count} anime`;
-                    })
-                    .join("\n");
-
-                const topUser = users.sort((a, b) => b.statistics.anime.count - a.statistics.anime.count)[0];
-
-                const serverStatsEmbed = new EmbedBuilder()
-                    .setColor("#C3B1E1")
-                    .setTitle(`📊 Server AniList Statistics`)
-                    .setDescription(`Tracking **${uniqueUsers.size}** users in this server`)
-                    .addFields(
-                        {
-                            name: "📺 Combined Anime Stats",
-                            value: [
-                                `**Total Anime Watched:** ${totalAnime.toLocaleString()}`,
-                                `**Total Episodes:** ${totalEpisodes.toLocaleString()}`,
-                                `**Total Days Watched:** ${totalDays}`,
-                                `**Average Score:** ${avgScore}`,
-                            ].join("\n"),
-                            inline: true,
-                        },
-                        {
-                            name: "📖 Combined Manga Stats",
-                            value: [
-                                `**Total Manga Read:** ${totalManga.toLocaleString()}`,
-                                `**Total Chapters:** ${totalChapters.toLocaleString()}`,
-                            ].join("\n"),
-                            inline: true,
-                        },
-                        {
-                            name: "🏆 Top Watchers",
-                            value: topWatchers,
-                        }
-                    )
-                    .setThumbnail(topUser?.avatar?.medium || null)
-                    .setTimestamp();
-
-                await interaction.editReply({ embeds: [serverStatsEmbed] });
-            } catch (error) {
-                console.error("Error fetching server stats:", error.message, error.stack);
-                await interaction.editReply(
-                    `There was an error fetching server statistics: ${error.message}`
-                );
-            }
-        }
+        await cmd.execute(interaction, ctx);
     } catch (error) {
         // RateLimitError is expected and already logged at source — give the
         // user a clear "try again in Xs" instead of a generic failure.
@@ -1076,7 +579,7 @@ client.on("interactionCreate", async (interaction) => {
             return;
         }
         console.error(
-            `An error occurred while executing the /${commandName} command:`,
+            `An error occurred while executing the /${interaction.commandName} command:`,
             error,
         );
         try {
