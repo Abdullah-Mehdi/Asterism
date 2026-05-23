@@ -1056,6 +1056,9 @@ async function startBot() {
         // synchronous=NORMAL fsyncs at COMMIT (default with WAL, but stated
         // explicitly so a future PRAGMA tweak doesn't quietly weaken durability).
         await db.exec("PRAGMA synchronous = NORMAL;");
+        // 5 second wait on lock contention (e.g. someone manually opens bot.db
+        // in `sqlite3` shell while the bot is live) before SQLITE_BUSY fires.
+        await db.exec("PRAGMA busy_timeout = 5000;");
 
         await db.exec(
             `CREATE TABLE IF NOT EXISTS tracked_users (
