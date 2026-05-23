@@ -721,8 +721,13 @@ client.on("interactionCreate", async (interaction) => {
                     `✓ Successfully deleted ${userToUntrackInfo.anilistUsername} from database (verified).`,
                 );
                 delete trackedUsers[channelId][userIdToUntrack];
-                if (Object.keys(trackedUsers[channelId]).length === 0)
+                if (Object.keys(trackedUsers[channelId]).length === 0) {
                     delete trackedUsers[channelId];
+                    // Channel ab khaali hai — per-channel caches bhi drop kar do
+                    // taake long-running deploys mein stale entries jama na hon.
+                    delete webhookCache[channelId];
+                    delete permissionsCache[channelId];
+                }
                 await interaction.editReply(
                     `Stopped tracking **${userToUntrackInfo.anilistUsername}** in this channel.`,
                 );
