@@ -110,6 +110,20 @@ const firstPollComplete = new Set();
 const PROFILE_CACHE_DURATION = 86400000; // 24 hours in ms
 const PERMISSIONS_CACHE_TTL = 3600000; // 1 hour — channel perms drift slowly
 
+// AniList rate-limit gate. Updated when the API returns 429; while
+// `Date.now() < rateLimitedUntil`, every aniListFetch short-circuits.
+let rateLimitedUntil = 0;
+
+// Marker error so callers can distinguish "AniList told us to wait" from
+// generic network failures and respond with a friendly retry hint.
+class RateLimitError extends Error {
+    constructor(retryAfterMs) {
+        super(`AniList rate-limited for another ~${Math.ceil(retryAfterMs / 1000)}s`);
+        this.name = "RateLimitError";
+        this.retryAfterMs = retryAfterMs;
+    }
+}
+
 // AniList profile colors ko hex codes mein convert karne ke liye mapping
 const anilistColorMap = {
     blue: "#3DB4F2",
@@ -144,6 +158,52 @@ function getPreferredTitle(mediaTitles, preference) {
         default:
             return mediaTitles.romaji || mediaTitles.english || mediaTitles.native;
     }
+}
+
+// =========================================================================
+// AniList client
+// =========================================================================
+
+/**
+ * POST a GraphQL query to AniList with rate-limit awareness.
+ * Throws RateLimitError when we know we'd be denied (gate is active, or
+ * the response itself returns 429). On success returns the parsed JSON.
+ *
+ * AniList's per-IP limit is 90 requests/minute and is communicated via
+ * `X-RateLimit-Remaining` / `X-RateLimit-Reset` headers.
+ */
+async function aniListFetch(query, variables) {
+    const now = Date.now();
+    if (now < rateLimitedUntil) {
+        throw new RateLimitError(rateLimitedUntil - now);
+    }
+
+    const response = await fetch("https://graphql.anilist.co", {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json",
+        },
+        body: JSON.stringify({ query, variables }),
+    });
+
+    const remainingHeader = response.headers.get("x-ratelimit-remaining");
+    const remaining = remainingHeader != null ? parseInt(remainingHeader, 10) : NaN;
+    if (Number.isFinite(remaining) && remaining < 10) {
+        console.warn(`⚠️ AniList rate limit low: ${remaining} requests remaining.`);
+    }
+
+    if (response.status === 429) {
+        const resetSec = parseInt(response.headers.get("x-ratelimit-reset") ?? "0", 10);
+        rateLimitedUntil = Number.isFinite(resetSec) && resetSec > 0
+            ? resetSec * 1000
+            : Date.now() + 60_000; // 60s fallback if header missing
+        const waitMs = rateLimitedUntil - Date.now();
+        console.warn(`⚠️ AniList returned 429. Backing off for ~${Math.ceil(waitMs / 1000)}s.`);
+        throw new RateLimitError(waitMs);
+    }
+
+    return response.json();
 }
 
 // =========================================================================
@@ -271,7 +331,6 @@ async function checkAniListActivity(channelId, anilistUserId) {
     if (!trackingInfo) return;
 
     const { anilistUsername, lastActivityId, userAvatar, userColor, titleLanguage, profileLastUpdated, activityFilter } = trackingInfo;
-    const url = "https://graphql.anilist.co";
     const filter = activityFilter || "both";
     const now = Date.now();
     const userKey = `${channelId}:${anilistUserId}`;
@@ -327,15 +386,7 @@ async function checkAniListActivity(channelId, anilistUserId) {
 
         const variables = { userId: anilistUserId };
 
-        const response = await fetch(url, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                Accept: "application/json",
-            },
-            body: JSON.stringify({ query: combinedQuery, variables }),
-        });
-        const data = await response.json();
+        const data = await aniListFetch(combinedQuery, variables);
 
         if (!data || !data.data) {
             console.error(`✗ Invalid API response for ${anilistUsername}:`, data?.errors || "Unknown error");
@@ -473,6 +524,10 @@ async function checkAniListActivity(channelId, anilistUserId) {
         // (A throw skips this line, so failed first polls re-arm themselves.)
         firstPollComplete.add(userKey);
     } catch (error) {
+        if (error.name === "RateLimitError") {
+            // Already logged at source; don't duplicate. Guard stays armed.
+            return;
+        }
         console.error(`Error fetching activity for ${anilistUsername}:`, error);
     }
 }
@@ -613,18 +668,7 @@ client.on("interactionCreate", async (interaction) => {
                     options { profileColor, titleLanguage }
                 } 
             }`;
-            const response = await fetch("https://graphql.anilist.co", {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                    Accept: "application/json",
-                },
-                body: JSON.stringify({
-                    query: findUserQuery,
-                    variables: { username: anilistUsername },
-                }),
-            });
-            const data = await response.json();
+            const data = await aniListFetch(findUserQuery, { username: anilistUsername });
             if (!data.data || !data.data.User)
                 return interaction.editReply(
                     `Could not find an AniList user with the username **${anilistUsername}**. Please check spelling.`,
@@ -781,19 +825,7 @@ client.on("interactionCreate", async (interaction) => {
             }`;
 
             try {
-                const response = await fetch("https://graphql.anilist.co", {
-                    method: "POST",
-                    headers: {
-                        "Content-Type": "application/json",
-                        Accept: "application/json",
-                    },
-                    body: JSON.stringify({
-                        query: statsQuery,
-                        variables: { username: anilistUsername },
-                    }),
-                });
-
-                const data = await response.json();
+                const data = await aniListFetch(statsQuery, { username: anilistUsername });
 
                 if (!data.data || !data.data.User) {
                     return interaction.editReply(
@@ -927,22 +959,12 @@ client.on("interactionCreate", async (interaction) => {
                 }`;
 
                 try {
-                    const response = await fetch("https://graphql.anilist.co", {
-                        method: "POST",
-                        headers: {
-                            "Content-Type": "application/json",
-                            Accept: "application/json",
-                        },
-                        body: JSON.stringify({
-                            query: userQuery,
-                            variables: { id: parseInt(userId) },
-                        }),
-                    });
-
-                    const data = await response.json();
+                    const data = await aniListFetch(userQuery, { id: parseInt(userId) });
                     return data.data?.User || null;
                 } catch (error) {
-                    console.error(`Error fetching user ${userId}:`, error);
+                    if (error.name !== "RateLimitError") {
+                        console.error(`Error fetching user ${userId}:`, error);
+                    }
                     return null;
                 }
             });
@@ -952,6 +974,13 @@ client.on("interactionCreate", async (interaction) => {
                 const users = usersData.filter(u => u !== null);
 
                 if (users.length === 0) {
+                    // Distinguish rate-limit drought from genuine no-data.
+                    if (Date.now() < rateLimitedUntil) {
+                        const sec = Math.ceil((rateLimitedUntil - Date.now()) / 1000);
+                        return interaction.editReply(
+                            `AniList is temporarily rate-limiting us. Try again in ~${sec}s.`
+                        );
+                    }
                     return interaction.editReply(
                         "No data available for tracked users in this server."
                     );
@@ -1027,6 +1056,19 @@ client.on("interactionCreate", async (interaction) => {
             }
         }
     } catch (error) {
+        // RateLimitError is expected and already logged at source — give the
+        // user a clear "try again in Xs" instead of a generic failure.
+        if (error.name === "RateLimitError") {
+            const sec = Math.ceil(error.retryAfterMs / 1000);
+            try {
+                await interaction.editReply(
+                    `AniList is temporarily rate-limiting us. Try again in ~${sec}s.`,
+                );
+            } catch (e) {
+                console.error("Failed to send rate-limit reply:", e.message);
+            }
+            return;
+        }
         console.error(
             `An error occurred while executing the /${commandName} command:`,
             error,
