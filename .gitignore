@@ -4,5 +4,5 @@ tracked_users.json
 bot.db
 bot.lock
 config.json
-AGENTS.md 
+AGENTS.md
 DEPLOYING.md
