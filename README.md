@@ -42,13 +42,16 @@ You need Node.js 20+ and a Discord application.
 
 2. Create the bot in the [Discord Developer Portal](https://discord.com/developers/applications). Grab the application ID and bot token.
 
-3. Drop a `config.json` in the project root:
-   ```json
-   {
-     "clientId": "your_application_id",
-     "token":    "your_bot_token"
-   }
-   ```
+3. Provide the credentials. Two options — pick whichever fits your environment:
+   - **Environment variables** (preferred on Replit, where they live in Secrets and stay encrypted): `DISCORD_TOKEN` and `DISCORD_CLIENT_ID`.
+   - **`config.json`** in the project root, used as a fallback when the env vars are missing:
+     ```json
+     {
+       "clientId": "your_application_id",
+       "token":    "your_bot_token"
+     }
+     ```
+   Env wins if both are set. The file is optional — if env vars cover both, you don't need it at all.
 
 4. Register the slash commands once (and again any time you change `deploy-commands.js`):
    ```bash

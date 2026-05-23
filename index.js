@@ -2,7 +2,15 @@
 const { open } = require("sqlite");
 const sqlite3 = require("sqlite3").verbose();
 
-const { token } = require("./config.json");
+// Token can come from Replit Secrets (env) or config.json. Env wins.
+// config.json is now optional — missing file is fine if env is set.
+let _configFile = {};
+try { _configFile = require("./config.json"); } catch { /* file optional */ }
+const token = process.env.DISCORD_TOKEN ?? _configFile.token;
+if (!token) {
+    console.error("✗ Missing DISCORD_TOKEN — set it in Replit Secrets, env, or config.json.");
+    process.exit(1);
+}
 
 const {
     Client,

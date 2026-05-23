@@ -1,8 +1,19 @@
 const { REST } = require("@discordjs/rest");
 const { Routes } = require("discord-api-types/v10");
 const { SlashCommandBuilder } = require("discord.js");
-// Make sure your config.json has your clientId and token!
-const { clientId, token } = require("./config.json");
+// clientId + token can come from Replit Secrets (env) or config.json. Env wins.
+let _configFile = {};
+try { _configFile = require("./config.json"); } catch { /* file optional */ }
+const clientId = process.env.DISCORD_CLIENT_ID ?? _configFile.clientId;
+const token    = process.env.DISCORD_TOKEN     ?? _configFile.token;
+if (!clientId) {
+    console.error("✗ Missing DISCORD_CLIENT_ID — set it in env or config.json.");
+    process.exit(1);
+}
+if (!token) {
+    console.error("✗ Missing DISCORD_TOKEN — set it in env or config.json.");
+    process.exit(1);
+}
 
 const commands = [
     new SlashCommandBuilder()
