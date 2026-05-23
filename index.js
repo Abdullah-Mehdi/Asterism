@@ -11,7 +11,7 @@ const {
     MessageFlags,
     PermissionsBitField,
 } = require("discord.js");
-const fetch = require("node-fetch");
+// Node 20+ provides a global `fetch` — no node-fetch dep needed.
 const fs = require("fs");
 const path = require("path");
 
