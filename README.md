@@ -81,8 +81,10 @@ Optional but recommended: **Manage Webhooks**. Without it, the bot can still pos
 ## How it runs
 
 - **Single-instance lock**: `bot.lock` is written on startup with the current PID. If a live PID already owns the lock, the new process exits with code 1. Stale locks (dead PID) are cleared automatically. This stops Replit's Run + Deploy from spawning two bots.
-- **Database**: SQLite in WAL mode at `$REPL_HOME/bot.db` (or `./bot.db` locally). Migrations are idempotent `ALTER TABLE` checks on startup.
+- **Database**: SQLite in WAL mode at `$REPL_HOME/bot.db` (or `./bot.db` locally). Migrations are idempotent `ALTER TABLE` checks on startup. A `bot.db.backup` snapshot is written once at startup and weekly thereafter — coarse insurance, not point-in-time recovery.
 - **Polling**: every 10 minutes, every tracked user gets one combined GraphQL call (profile data is folded into the same request once a day). On bot startup, every tracked user gets one immediate check before the interval kicks in.
+- **Startup catch-up**: on the first successful poll after the bot launches, any pending backlog of more than one new activity is summarised down to the single most recent — so a redeploy can't flood the channel.
+- **Rate-limit gate**: a 429 from AniList sets a process-wide window read from `X-RateLimit-Reset`; every subsequent fetch (polling and commands) short-circuits with a "try again in ~Xs" reply until the window passes.
 - **Posting**: at most 15 activities per user per tick. Oldest first. Filtered by the per-user `anime`/`manga`/`both` preference.
 - **Shutdown**: SIGINT, SIGTERM, SIGQUIT, and SIGHUP all checkpoint the WAL, close the database, and clear the lock file.
 
@@ -113,11 +115,16 @@ The same AniList user can be tracked in multiple channels independently. Each ch
 
 ```
 Asterism/
-├── index.js              Main bot: lock, DB, commands, polling loop
+├── index.js              Lock, DB, polling loop, dispatcher
 ├── deploy-commands.js    One-shot slash command registration
+├── commands/             One file per slash command (auto-loaded)
+├── lib/
+│   ├── anilist.js        AniList GraphQL client + rate-limit gate
+│   └── types.js          JSDoc typedefs (TrackedUser, CommandCtx, …)
 ├── package.json
-├── config.json           Not in git — you create it
+├── config.json           Optional — token can be in env vars instead
 ├── bot.db                SQLite database, auto-created
+├── bot.db.backup         Weekly snapshot of bot.db
 ├── bot.lock              PID lock, auto-managed
 ├── README.md
 ├── TERMS.md
