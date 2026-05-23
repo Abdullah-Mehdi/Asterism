@@ -1,10 +1,14 @@
-﻿// sqlite async/await ke liye
+﻿// @ts-check
+// sqlite async/await ke liye
 const { open } = require("sqlite");
 const sqlite3 = require("sqlite3").verbose();
 
 // Token can come from Replit Secrets (env) or config.json. Env wins.
 // config.json is now optional — missing file is fine if env is set.
+/** @type {{ token?: string }} */
 let _configFile = {};
+// @ts-ignore — config.json is gitignored, so it may not exist at type-check time;
+// the try/catch handles the runtime "missing file" case.
 try { _configFile = require("./config.json"); } catch { /* file optional */ }
 const token = process.env.DISCORD_TOKEN ?? _configFile.token;
 if (!token) {
@@ -49,7 +53,7 @@ function checkSingleInstance() {
             const lockPid = fs.readFileSync(LOCK_FILE, 'utf8');
             try {
                 // Signal 0 = "is the process alive?" without actually killing it.
-                process.kill(lockPid, 0);
+                process.kill(parseInt(lockPid, 10), 0);
                 console.error(`❌ Another instance is already running (PID: ${lockPid}). Exiting...`);
                 process.exit(1);
             } catch (e) {
@@ -102,14 +106,19 @@ process.on("unhandledRejection", (error) => {
 // Globals & Discord client
 // =========================================================================
 
+/** @type {Object<string, Object<string, import("./lib/types").TrackedUser>>} */
 let trackedUsers = {}; // memory mein users ka data rakhe ga
-let db; // database ka instance
+/** @type {any} */
+let db; // database ka instance (sqlite Database — no exported type)
+/** @type {Object<string, import("discord.js").Webhook>} */
 let webhookCache = {}; // channelId -> Webhook
+/** @type {Object<string, import("./lib/types").ChannelPermissionsEntry>} */
 let permissionsCache = {}; // channelId -> { hasManageWebhooks, expiresAt }
 // Tracks (channelId:anilistUserId) pairs whose first successful poll has
 // already happened in *this* process. Re-armed by every restart, which is
 // the whole point: any backlog accumulated during downtime gets summarised
 // down to a single post per user instead of flooding the channel.
+/** @type {Set<string>} */
 const firstPollComplete = new Set();
 const PROFILE_CACHE_DURATION = 86400000; // 24 hours in ms
 const PERMISSIONS_CACHE_TTL = 3600000; // 1 hour — channel perms drift slowly
@@ -160,9 +169,14 @@ function getPreferredTitle(mediaTitles, preference) {
  * Cached webhooks are revalidated on each call; deleted webhooks are evicted automatically.
  */
 async function getOrCreateWebhook(channel) {
+    // Narrow once in a local — TS doesn't preserve the null-check across the
+    // closures below.
+    const botUser = client.user;
+    if (!botUser) return null;
     if (webhookCache[channel.id]) {
         try {
             // Revalidate — webhook may have been deleted out from under us.
+            // @ts-ignore — Webhook.fetch() exists at runtime; v14 types omit it
             await webhookCache[channel.id].fetch();
             return webhookCache[channel.id];
         } catch (error) {
@@ -179,7 +193,7 @@ async function getOrCreateWebhook(channel) {
         if (cached && cached.expiresAt > now) {
             hasManageWebhooks = cached.hasManageWebhooks;
         } else {
-            hasManageWebhooks = channel.permissionsFor(client.user)
+            hasManageWebhooks = channel.permissionsFor(botUser)
                 .has(PermissionsBitField.Flags.ManageWebhooks);
             permissionsCache[channel.id] = {
                 hasManageWebhooks,
@@ -192,7 +206,7 @@ async function getOrCreateWebhook(channel) {
         }
 
         const webhooks = await channel.fetchWebhooks();
-        let webhook = webhooks.find(wh => wh.owner?.id === client.user.id && wh.name === 'AniList Activity');
+        let webhook = webhooks.find(wh => wh.owner?.id === botUser.id && wh.name === 'AniList Activity');
 
         if (!webhook) {
             webhook = await channel.createWebhook({
@@ -271,6 +285,7 @@ async function sendActivityUpdate(channel, anilistUsername, userAvatar, embed) {
  * re-evaluated next tick.
  */
 async function checkAniListActivity(channelId, anilistUserId) {
+    if (!client.user) return; // before ready — narrow for TS, also defensive
     const trackingInfo = trackedUsers[channelId]?.[anilistUserId];
     if (!trackingInfo) return;
 
@@ -419,7 +434,7 @@ async function checkAniListActivity(channelId, anilistUserId) {
                             .setColor(embedColor)
                             .setAuthor({
                                 name: `${anilistUsername}'s Activity`,
-                                iconURL: currentAvatar,
+                                iconURL: currentAvatar ?? undefined,
                                 url: `https://anilist.co/user/${anilistUsername}/`,
                             })
                             .setDescription(description)
@@ -481,6 +496,7 @@ async function checkAniListActivity(channelId, anilistUserId) {
 // =========================================================================
 
 client.on(Events.ClientReady, () => {
+    if (!client.user) return; // unreachable in practice, but narrows client.user for TS
     console.log(`Logged in as ${client.user.tag}!`);
 
     client.user.setActivity('/help');

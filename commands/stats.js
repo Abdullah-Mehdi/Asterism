@@ -1,3 +1,4 @@
+// @ts-check
 const { SlashCommandBuilder, EmbedBuilder } = require("discord.js");
 const { aniListFetch } = require("../lib/anilist");
 
@@ -10,8 +11,11 @@ module.exports = {
                 .setDescription("The AniList username to get stats for.")
                 .setRequired(true)),
     ephemeral: false,
+    /**
+     * @param {import("discord.js").ChatInputCommandInteraction} interaction
+     */
     async execute(interaction) {
-        const anilistUsername = interaction.options.getString("username");
+        const anilistUsername = interaction.options.getString("username", true);
 
         const statsQuery = `query ($username: String) {
             User(name: $username) {

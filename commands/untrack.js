@@ -1,3 +1,4 @@
+// @ts-check
 const { SlashCommandBuilder } = require("discord.js");
 
 module.exports = {
@@ -9,9 +10,13 @@ module.exports = {
                 .setDescription("The AniList username to stop tracking.")
                 .setRequired(true)),
     ephemeral: true,
+    /**
+     * @param {import("discord.js").ChatInputCommandInteraction} interaction
+     * @param {import("../lib/types").CommandCtx} ctx
+     */
     async execute(interaction, ctx) {
         const { db, trackedUsers, webhookCache, permissionsCache } = ctx;
-        const usernameToUntrack = interaction.options.getString("username");
+        const usernameToUntrack = interaction.options.getString("username", true);
         const channelId = interaction.channelId;
         const usersInChannel = trackedUsers[channelId];
         if (!usersInChannel)

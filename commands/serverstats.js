@@ -1,3 +1,4 @@
+// @ts-check
 const { SlashCommandBuilder, EmbedBuilder } = require("discord.js");
 const { aniListFetch, getRateLimitRemainingMs } = require("../lib/anilist");
 
@@ -6,6 +7,10 @@ module.exports = {
         .setName("serverstats")
         .setDescription("Shows statistics for all tracked users in this server."),
     ephemeral: false,
+    /**
+     * @param {import("discord.js").ChatInputCommandInteraction} interaction
+     * @param {import("../lib/types").CommandCtx} ctx
+     */
     async execute(interaction, ctx) {
         const { client, trackedUsers } = ctx;
 

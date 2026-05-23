@@ -1,3 +1,4 @@
+// @ts-check
 const { SlashCommandBuilder } = require("discord.js");
 const { aniListFetch } = require("../lib/anilist");
 
@@ -19,9 +20,15 @@ module.exports = {
                     { name: "Manga Only", value: "manga" },
                 )),
     ephemeral: false,
+    /**
+     * @param {import("discord.js").ChatInputCommandInteraction} interaction
+     * @param {import("../lib/types").CommandCtx} ctx
+     */
     async execute(interaction, ctx) {
         const { db, trackedUsers, checkAniListActivity } = ctx;
-        const anilistUsername = interaction.options.getString("username");
+        // Pass `true` as the second arg to assert "required" — narrows the
+        // return type from `string | null` to `string`.
+        const anilistUsername = interaction.options.getString("username", true);
         const activityFilter = interaction.options.getString("filter") || "both";
         const channelId = interaction.channelId;
 

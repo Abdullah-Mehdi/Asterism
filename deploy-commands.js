@@ -1,8 +1,12 @@
+// @ts-check
 const { REST } = require("@discordjs/rest");
 const { Routes } = require("discord-api-types/v10");
 
 // clientId + token can come from Replit Secrets (env) or config.json. Env wins.
+/** @type {{ clientId?: string, token?: string }} */
 let _configFile = {};
+// @ts-ignore — config.json is gitignored, so it may not exist at type-check time;
+// the try/catch handles the runtime "missing file" case.
 try { _configFile = require("./config.json"); } catch { /* file optional */ }
 const clientId = process.env.DISCORD_CLIENT_ID ?? _configFile.clientId;
 const token    = process.env.DISCORD_TOKEN     ?? _configFile.token;

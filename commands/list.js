@@ -1,3 +1,4 @@
+// @ts-check
 const { SlashCommandBuilder, EmbedBuilder } = require("discord.js");
 
 module.exports = {
@@ -5,6 +6,10 @@ module.exports = {
         .setName("list")
         .setDescription("Shows all AniList users currently being tracked in this channel."),
     ephemeral: true,
+    /**
+     * @param {import("discord.js").ChatInputCommandInteraction} interaction
+     * @param {import("../lib/types").CommandCtx} ctx
+     */
     async execute(interaction, ctx) {
         const { trackedUsers } = ctx;
         const usersInChannel = trackedUsers[interaction.channelId];

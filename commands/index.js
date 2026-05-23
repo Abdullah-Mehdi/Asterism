@@ -1,3 +1,4 @@
+// @ts-check
 // Auto-loader: every sibling .js file becomes a registered command.
 // Order is alphabetical by filename so /help renders predictably.
 // Drop a new file with `{ data, ephemeral, execute }` and it gets picked up
