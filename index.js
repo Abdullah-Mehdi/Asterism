@@ -6,6 +6,7 @@ const { token } = require("./config.json");
 
 const {
     Client,
+    Events,
     GatewayIntentBits,
     EmbedBuilder,
     MessageFlags,
@@ -92,7 +93,9 @@ process.on("unhandledRejection", (error) => {
 let trackedUsers = {}; // memory mein users ka data rakhe ga
 let db; // database ka instance
 let webhookCache = {}; // channelId -> Webhook
+let permissionsCache = {}; // channelId -> { hasManageWebhooks, expiresAt }
 const PROFILE_CACHE_DURATION = 86400000; // 24 hours in ms
+const PERMISSIONS_CACHE_TTL = 3600000; // 1 hour — channel perms drift slowly
 
 // AniList profile colors ko hex codes mein convert karne ke liye mapping
 const anilistColorMap = {
@@ -151,8 +154,22 @@ async function getOrCreateWebhook(channel) {
     }
 
     try {
-        const permissions = channel.permissionsFor(client.user);
-        if (!permissions.has(PermissionsBitField.Flags.ManageWebhooks)) {
+        // Permissions check is cached per channel to avoid recomputing role math
+        // on every poll. 1 hour TTL — perms changes lag a tick at most.
+        const now = Date.now();
+        const cached = permissionsCache[channel.id];
+        let hasManageWebhooks;
+        if (cached && cached.expiresAt > now) {
+            hasManageWebhooks = cached.hasManageWebhooks;
+        } else {
+            hasManageWebhooks = channel.permissionsFor(client.user)
+                .has(PermissionsBitField.Flags.ManageWebhooks);
+            permissionsCache[channel.id] = {
+                hasManageWebhooks,
+                expiresAt: now + PERMISSIONS_CACHE_TTL,
+            };
+        }
+        if (!hasManageWebhooks) {
             console.warn(`⚠️ Missing MANAGE_WEBHOOKS permission in channel ${channel.id}`);
             return null;
         }
@@ -261,7 +278,7 @@ async function checkAniListActivity(channelId, anilistUserId) {
                     avatar { large }, 
                     options { profileColor, titleLanguage } 
                 }
-                Page(page: 1, perPage: 50) { 
+                Page(page: 1, perPage: 20) { 
                     activities(userId: $userId, sort: ID_DESC, type: MEDIA_LIST) { 
                         ... on ListActivity { 
                             id status progress createdAt 
@@ -277,7 +294,7 @@ async function checkAniListActivity(channelId, anilistUserId) {
                 }
             }`
             : `query ($userId: Int) { 
-                Page(page: 1, perPage: 50) { 
+                Page(page: 1, perPage: 20) { 
                     activities(userId: $userId, sort: ID_DESC, type: MEDIA_LIST) { 
                         ... on ListActivity { 
                             id status progress createdAt 
@@ -320,9 +337,8 @@ async function checkAniListActivity(channelId, anilistUserId) {
                 [currentAvatar, currentColor, currentTitleLanguage, now, channelId, anilistUserId]
             );
 
-            // Checkpoint so a sudden kill doesn't lose the profile refresh.
-            await db.exec("PRAGMA wal_checkpoint(PASSIVE);");
-
+            // No checkpoint here — synchronous=NORMAL fsyncs at commit, and the
+            // 30-minute periodic checkpoint folds WAL into the main DB file.
             trackedUsers[channelId][anilistUserId].userAvatar = currentAvatar;
             trackedUsers[channelId][anilistUserId].userColor = currentColor;
             trackedUsers[channelId][anilistUserId].titleLanguage = currentTitleLanguage;
@@ -406,8 +422,6 @@ async function checkAniListActivity(channelId, anilistUserId) {
                     anilistUserId,
                 ]);
 
-                await db.exec("PRAGMA wal_checkpoint(PASSIVE);");
-
                 // Read-back verification — DB write must stick before we trust memory.
                 const verification = await db.get(
                     `SELECT lastActivityId FROM tracked_users WHERE channelId = ? AND anilistUserId = ?`,
@@ -436,7 +450,7 @@ async function checkAniListActivity(channelId, anilistUserId) {
 // Ready handler — initial check + intervals
 // =========================================================================
 
-client.on("ready", () => {
+client.on(Events.ClientReady, () => {
     console.log(`Logged in as ${client.user.tag}!`);
 
     client.user.setActivity('/help');
@@ -458,6 +472,9 @@ client.on("ready", () => {
 
     // har 10 minute mein check karte hain
     setInterval(() => {
+        // No tracked users → no work, no log line, no wakeup cost.
+        if (Object.keys(trackedUsers).length === 0) return;
+
         console.log("Checking for new AniList activity...");
         for (const channelId in trackedUsers) {
             for (const anilistUserId in trackedUsers[channelId]) {
@@ -1013,6 +1030,9 @@ async function startBot() {
 
         // WAL mode = better concurrent reads + crash resistance.
         await db.exec("PRAGMA journal_mode = WAL;");
+        // synchronous=NORMAL fsyncs at COMMIT (default with WAL, but stated
+        // explicitly so a future PRAGMA tweak doesn't quietly weaken durability).
+        await db.exec("PRAGMA synchronous = NORMAL;");
 
         await db.exec(
             `CREATE TABLE IF NOT EXISTS tracked_users (
