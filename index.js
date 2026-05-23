@@ -94,6 +94,11 @@ let trackedUsers = {}; // memory mein users ka data rakhe ga
 let db; // database ka instance
 let webhookCache = {}; // channelId -> Webhook
 let permissionsCache = {}; // channelId -> { hasManageWebhooks, expiresAt }
+// Tracks (channelId:anilistUserId) pairs whose first successful poll has
+// already happened in *this* process. Re-armed by every restart, which is
+// the whole point: any backlog accumulated during downtime gets summarised
+// down to a single post per user instead of flooding the channel.
+const firstPollComplete = new Set();
 const PROFILE_CACHE_DURATION = 86400000; // 24 hours in ms
 const PERMISSIONS_CACHE_TTL = 3600000; // 1 hour — channel perms drift slowly
 
@@ -261,6 +266,8 @@ async function checkAniListActivity(channelId, anilistUserId) {
     const url = "https://graphql.anilist.co";
     const filter = activityFilter || "both";
     const now = Date.now();
+    const userKey = `${channelId}:${anilistUserId}`;
+    const isFirstPoll = !firstPollComplete.has(userKey);
 
     // Profile data 24h baad refresh karte hain — saves ~98% of profile-only API calls.
     const needsProfileRefresh = !profileLastUpdated || (now - profileLastUpdated) > PROFILE_CACHE_DURATION;
@@ -369,6 +376,18 @@ async function checkAniListActivity(channelId, anilistUserId) {
             }
             // 'both' => no filter
 
+            // First-poll backlog guard. After a redeploy, any pending backlog
+            // is summarised down to the most recent activity so the channel
+            // doesn't get flooded by downtime catch-up. Re-armed every restart.
+            if (isFirstPoll && newActivities.length > 1) {
+                const skipped = newActivities.length - 1;
+                console.log(
+                    `🔧 Startup catch-up for ${anilistUsername}: posting most recent only, ` +
+                    `skipping ${skipped} backlog activit${skipped === 1 ? 'y' : 'ies'}.`,
+                );
+                newActivities = [newActivities[0]];
+            }
+
             if (newActivities.length > 0) {
                 // 15 ka cap so a long absence can't dump 50 posts at once.
                 const activitiesToShow = newActivities.slice(0, 15);
@@ -441,6 +460,10 @@ async function checkAniListActivity(channelId, anilistUserId) {
                 }
             }
         }
+
+        // Successful round-trip — guard is now consumed for this user.
+        // (A throw skips this line, so failed first polls re-arm themselves.)
+        firstPollComplete.add(userKey);
     } catch (error) {
         console.error(`Error fetching activity for ${anilistUsername}:`, error);
     }
