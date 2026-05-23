@@ -45,7 +45,9 @@ const LOCK_FILE = process.env.REPL_HOME ?
  * Acquire a process-wide lock at LOCK_FILE so only one bot instance runs.
  * If a live PID already owns the lock, exits with code 1.
  * Stale locks (PID no longer alive) are cleared and re-acquired.
- * Wires `exit`, `SIGINT`, `SIGTERM`, and `SIGQUIT` to clean up the lock.
+ * Wires `process.on('exit')` as a last-resort lock-unlink fallback;
+ * termination signals (SIGINT/SIGTERM/SIGQUIT/SIGHUP) are routed to
+ * `gracefulShutdown` separately at the bottom of the file.
  */
 function checkSingleInstance() {
     try {
@@ -66,24 +68,16 @@ function checkSingleInstance() {
         fs.writeFileSync(LOCK_FILE, process.pid.toString());
         console.log(`✓ Lock acquired (PID: ${process.pid})`);
 
+        // Last-resort lock cleanup — fires even if gracefulShutdown died mid-run.
+        // Termination signals (SIGINT/SIGTERM/SIGQUIT/SIGHUP) are wired to
+        // gracefulShutdown at the bottom of the file so the WAL gets a final
+        // checkpoint and the DB closes cleanly before we hit this path.
         process.on('exit', () => {
             try {
                 fs.unlinkSync(LOCK_FILE);
             } catch (e) {
                 // Cleanup-only path; swallow errors.
             }
-        });
-
-        ['SIGINT', 'SIGTERM', 'SIGQUIT'].forEach(signal => {
-            process.on(signal, () => {
-                console.log(`\n${signal} received, cleaning up...`);
-                try {
-                    fs.unlinkSync(LOCK_FILE);
-                } catch (e) {
-                    // Cleanup-only path; swallow errors.
-                }
-                process.exit(0);
-            });
         });
 
     } catch (error) {
@@ -289,6 +283,27 @@ async function checkAniListActivity(channelId, anilistUserId) {
     const trackingInfo = trackedUsers[channelId]?.[anilistUserId];
     if (!trackingInfo) return;
 
+    // Defensive: activityFilter is the one field where stale memory would
+    // silently produce wrong-channel posts (anime activity in a manga-only
+    // channel and vice versa). Treat the DB as canonical for it on every
+    // poll and reconcile if drift is detected.
+    try {
+        const dbRow = await db.get(
+            `SELECT activityFilter FROM tracked_users WHERE channelId = ? AND anilistUserId = ?`,
+            [channelId, anilistUserId]
+        );
+        if (dbRow && dbRow.activityFilter && dbRow.activityFilter !== trackingInfo.activityFilter) {
+            console.warn(
+                `⚠️ Filter drift for ${trackingInfo.anilistUsername} in channel ${channelId}: ` +
+                `memory=${trackingInfo.activityFilter}, db=${dbRow.activityFilter}. Using DB.`
+            );
+            trackingInfo.activityFilter = dbRow.activityFilter;
+        }
+    } catch (e) {
+        // Best-effort — if the SELECT fails, fall back to memory.
+        console.warn(`Filter re-read failed for ${trackingInfo.anilistUsername}: ${e.message}`);
+    }
+
     const { anilistUsername, lastActivityId, userAvatar, userColor, titleLanguage, profileLastUpdated, activityFilter } = trackingInfo;
     const filter = activityFilter || "both";
     const now = Date.now();
@@ -412,7 +427,7 @@ async function checkAniListActivity(channelId, anilistUserId) {
                 const skippedCount = newActivities.length - activitiesToShow.length;
 
                 console.log(
-                    `${newActivities.length} new activity/activities for ${anilistUsername}` +
+                    `${newActivities.length} new activity/activities for ${anilistUsername} (filter: ${filter}, channel: ${channelId})` +
                     (skippedCount > 0 ? ` (showing ${activitiesToShow.length}, skipping ${skippedCount} older ones)` : ''),
                 );
                 const channel = await client.channels.fetch(channelId);
@@ -722,7 +737,7 @@ async function startBot() {
                 profileLastUpdated: row.profileLastUpdated,
                 activityFilter: row.activityFilter || "both",
             };
-            console.log(`  [${index + 1}] User: ${row.anilistUsername} (ID: ${row.anilistUserId}), LastActivityId: ${row.lastActivityId}, Channel: ${row.channelId}`);
+            console.log(`  [${index + 1}] User: ${row.anilistUsername} (ID: ${row.anilistUserId}), Filter: ${row.activityFilter ?? 'NULL'}, LastActivityId: ${row.lastActivityId}, Channel: ${row.channelId}`);
         });
 
         console.log(`=== DATABASE LOAD COMPLETE ===\n`);
@@ -740,7 +755,9 @@ async function startBot() {
 
 /**
  * Final WAL checkpoint, close the database, and remove the lock file.
- * Wired to SIGHUP only — SIGINT/SIGTERM/SIGQUIT are handled in checkSingleInstance().
+ * Wired to all termination signals (SIGINT/SIGTERM/SIGQUIT/SIGHUP) below,
+ * so a Replit redeploy gets a clean shutdown instead of bypassing the WAL
+ * checkpoint and db.close().
  */
 async function gracefulShutdown(signal) {
     console.log(`\n${signal} received. Closing database and shutting down gracefully...`);
@@ -765,7 +782,12 @@ async function gracefulShutdown(signal) {
     }
 }
 
-process.on('SIGHUP', () => gracefulShutdown('SIGHUP'));
+// All termination signals route through gracefulShutdown so a Replit redeploy
+// (which sends SIGTERM) gets a proper WAL checkpoint + db.close() instead of
+// just unlinking the lock and exiting with un-checkpointed writes.
+['SIGINT', 'SIGTERM', 'SIGQUIT', 'SIGHUP'].forEach(signal => {
+    process.on(signal, () => gracefulShutdown(signal));
+});
 
 // bot shuru karte hain
 startBot();
